@@ -37,6 +37,6 @@
 
 - [x] 5.1 Wire the side panel to background messages for loading preferences, starting runs, receiving updates, cancelling, switching judge tab, and history actions
 - [x] 5.2 Run TypeScript compile checks and production build
-- [ ] 5.3 Run the extension in Brave/Chrome dev mode and manually test input validation, demo run progress, cancellation, judge handoff, history rows, and clear history
+- [x] 5.3 Run the extension in Brave/Chrome dev mode and manually test input validation, demo run progress, cancellation, judge handoff, history rows, and clear history
 - [x] 5.4 Update README with the AI Council side panel dev/test flow and note that Round 1 uses demo execution only
-- [ ] 5.5 Stop after Round 1 verification and wait for user approval before proposing real chat-app automation
+- [x] 5.5 Stop after Round 1 verification and wait for user approval before proposing real chat-app automation
