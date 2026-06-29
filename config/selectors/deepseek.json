@@ -1,0 +1,33 @@
+{
+  "appKey": "deepseek",
+  "_comment": "Selectors verified from chat.deepseek.com DOM inspection 2026-06-29. Native CSS only, ordered priority arrays. Note: DeepSeek uses div[role='button'] with class-based disabled state (ds-button--disabled), not HTML disabled attribute.",
+  "selectors": {
+    "input": [
+      "textarea[placeholder*='Message DeepSeek']",
+      "textarea._27c9245",
+      "textarea.ds-scroll-area"
+    ],
+    "send": [
+      "div.ds-button.ds-button--primary.ds-button--filled.ds-button--circle",
+      "div.ds-button--primary.ds-button--circle",
+      "div[role='button'].ds-button--primary"
+    ],
+    "response": [
+      "div.ds-markdown",
+      "div.markdown-body",
+      "div[class*='markdown']",
+      "div[class*='answer']",
+      "div[class*='message-content']"
+    ],
+    "completion": [
+      "div[role='button'][aria-label*='stop']",
+      "div[role='button'][aria-label*='Stop']",
+      "div.ds-button--primary.ds-button--circle[class*='stop']"
+    ],
+    "blocked": [],
+    "loginError": [
+      "a[href*='/sign_in']",
+      "a[href*='/sign_up']"
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "apps": [
+    {
+      "key": "chatgpt",
+      "displayName": "ChatGPT",
+      "domain": "chat.openai.com",
+      "matchPatterns": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
+      "newChatUrl": "https://chatgpt.com/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/auth/login", "/auth/signup"],
+      "enabled": true
+    },
+    {
+      "key": "claude",
+      "displayName": "Claude",
+      "domain": "claude.ai",
+      "matchPatterns": ["https://claude.ai/*"],
+      "newChatUrl": "https://claude.ai/new",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/login"],
+      "enabled": true
+    },
+    {
+      "key": "gemini",
+      "displayName": "Gemini",
+      "domain": "gemini.google.com",
+      "matchPatterns": ["https://gemini.google.com/*"],
+      "newChatUrl": "https://gemini.google.com/app",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["accounts.google.com"],
+      "enabled": true
+    },
+    {
+      "key": "deepseek",
+      "displayName": "DeepSeek",
+      "domain": "chat.deepseek.com",
+      "matchPatterns": ["https://chat.deepseek.com/*"],
+      "newChatUrl": "https://chat.deepseek.com/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/sign_in", "/sign_up"],
+      "enabled": true
+    },
+    {
+      "key": "qwen",
+      "displayName": "Qwen",
+      "domain": "chat.qwen.ai",
+      "matchPatterns": ["https://chat.qwen.ai/*"],
+      "newChatUrl": "https://chat.qwen.ai/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/login"],
+      "enabled": true
+    },
+    {
+      "key": "kimi",
+      "displayName": "Kimi",
+      "domain": "kimi.moonshot.cn",
+      "matchPatterns": ["https://kimi.moonshot.cn/*"],
+      "newChatUrl": "https://kimi.moonshot.cn/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/login"],
+      "enabled": true
+    }
+  ]
+}

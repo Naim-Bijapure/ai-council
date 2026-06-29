@@ -24,7 +24,23 @@ export type AgentErrorReason =
   | "rate_limited"
   | "captcha"
   | "demo_error"
+  | "config_error"
+  | "send_failed"
   | "cancelled";
+
+export type JudgeStepStatus =
+  | "pending"
+  | "injecting"
+  | "sent"
+  | "error"
+  | "timeout";
+
+export interface JudgeStep {
+  status: JudgeStepStatus;
+  errorReason?: string;
+  startedAt: number | null;
+  completedAt: number | null;
+}
 
 export interface SupportedApp {
   key: AppKey;
@@ -56,6 +72,8 @@ export interface ActiveCouncilSession {
   judgeApp: AppKey;
   judgeChatUrl: string | null;
   agentResults: AgentResult[];
+  judgeStep: JudgeStep;
+  agentTabUrl: string | null;
   status: SessionStatus;
   durationMs: number;
   judgePrompt?: string;
@@ -64,7 +82,7 @@ export interface ActiveCouncilSession {
 
 export interface StoredCouncilSession extends Omit<ActiveCouncilSession, "id"> {
   id?: number;
-  demo: boolean;
+  demo?: boolean;
 }
 
 export type CouncilSnapshot =
@@ -91,12 +109,19 @@ export type PanelRequest =
   | { type: "NEW_QUESTION" }
   | { type: "SWITCH_TO_JUDGE" }
   | { type: "GET_HISTORY" }
-  | { type: "CLEAR_HISTORY" };
+  | { type: "CLEAR_HISTORY" }
+  | { type: "RUN_DIAGNOSTIC"; agentKeys: AppKey[] };
 
 export type BackgroundEvent = {
   type: "SESSION_UPDATED";
   snapshot: CouncilSnapshot;
 };
+
+export type DiagnosticReport = Partial<Record<AppKey, {
+  ready: boolean;
+  errorReason?: string;
+  tabUrl: string | null;
+}>>;
 
 export type PanelResponse =
   | {
@@ -104,6 +129,7 @@ export type PanelResponse =
       preferences?: CouncilPreferences;
       snapshot?: CouncilSnapshot;
       history?: StoredCouncilSession[];
+      diagnostic?: DiagnosticReport;
     }
   | {
       ok: false;

@@ -1,0 +1,29 @@
+{
+  "appKey": "kimi",
+  "_comment": "Placeholder selectors. Native CSS only. Replace after inspecting kimi.moonshot.cn DOM.",
+  "selectors": {
+    "input": [
+      "textarea[placeholder*='message']",
+      "div[contenteditable='true'][role='textbox']",
+      "textarea.editor"
+    ],
+    "send": [
+      "button[aria-label='Send']",
+      "div[role='button'][aria-label*='send']",
+      "button[type='submit']"
+    ],
+    "response": [
+      "div.markdown",
+      "div[class*='message-content']",
+      "div[class*='answer']"
+    ],
+    "completion": [
+      "button[aria-label='Stop']",
+      "div[role='button'][aria-label*='stop']"
+    ],
+    "blocked": [],
+    "loginError": [
+      "a[href*='/login']"
+    ]
+  }
+}

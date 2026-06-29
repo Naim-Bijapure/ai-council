@@ -14,7 +14,15 @@ export default defineConfig({
     description: "Run a demo AI council workflow from a Chrome side panel.",
     version: "0.1.0",
     permissions: ["storage", "tabs"],
-    host_permissions: [],
+    host_permissions: [
+      "https://chat.openai.com/*",
+      "https://chatgpt.com/*",
+      "https://chat.deepseek.com/*",
+      "https://claude.ai/*",
+      "https://gemini.google.com/*",
+      "https://chat.qwen.ai/*",
+      "https://kimi.moonshot.cn/*"
+    ],
     action: {
       default_title: "Open AI Council"
     }

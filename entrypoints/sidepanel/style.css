@@ -180,6 +180,11 @@ select {
   white-space: nowrap;
 }
 
+.check-row.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .primary-action,
 .secondary-action,
 .danger-action {
@@ -197,10 +202,78 @@ select {
   border-color: #aab7c8;
 }
 
+.diagnostic-block {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostic-report {
+  padding: 10px;
+  border: 1px solid #dce2ea;
+  border-radius: 6px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostic-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.status-ok {
+  color: #157f3d;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #b42318;
+  font-weight: 600;
+}
+
 .danger-action {
   margin-top: 12px;
   border-color: #d92d20;
   color: #b42318;
+}
+
+.fixed-flow-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #dce2ea;
+  border-radius: 7px;
+  background: #ffffff;
+  margin-bottom: 12px;
+}
+
+.flow-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.flow-label {
+  font-size: 11px;
+  color: #66778a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.flow-arrow {
+  font-size: 18px;
+  color: #66778a;
+}
+
+.judge-url-note {
+  font-size: 12px;
+  color: #66778a;
+  margin: 4px 0 0 0;
 }
 
 .session-view {

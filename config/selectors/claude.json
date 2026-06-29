@@ -1,0 +1,28 @@
+{
+  "appKey": "claude",
+  "_comment": "Placeholder selectors. Native CSS only. Replace after inspecting claude.ai DOM.",
+  "selectors": {
+    "input": [
+      "div[contenteditable='true'][role='textbox']",
+      "div.ProseMirror[contenteditable='true']",
+      "textarea[placeholder*='message']"
+    ],
+    "send": [
+      "button[aria-label='Send Message']",
+      "button[type='submit']"
+    ],
+    "response": [
+      "div[data-testid='message']",
+      "div.font-claude-message",
+      "div.prose"
+    ],
+    "completion": [
+      "button[aria-label='Stop']",
+      "div[role='button'][aria-label*='stop']"
+    ],
+    "blocked": [],
+    "loginError": [
+      "a[href*='/login']"
+    ]
+  }
+}

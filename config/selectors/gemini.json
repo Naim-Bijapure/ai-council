@@ -1,0 +1,29 @@
+{
+  "appKey": "gemini",
+  "_comment": "Placeholder selectors. Native CSS only. Replace after inspecting gemini.google.com DOM.",
+  "selectors": {
+    "input": [
+      "rich-textarea[contenteditable='true']",
+      "div[contenteditable='true'][role='textbox']",
+      "textarea[placeholder*='Enter']"
+    ],
+    "send": [
+      "button[aria-label='Send message']",
+      "mat-icon[aria-label='Send message']",
+      "button.send-button"
+    ],
+    "response": [
+      "message-content",
+      "div.response-container",
+      "div.markdown-main-panel"
+    ],
+    "completion": [
+      "button[aria-label='Stop']",
+      "mat-icon[aria-label='Stop generating']"
+    ],
+    "blocked": [],
+    "loginError": [
+      "a[href*='accounts.google.com']"
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "appKey": "chatgpt",
+  "_comment": "Selectors verified from chatgpt.com DOM inspection 2026-06-29. Native CSS only, ordered priority arrays.",
+  "selectors": {
+    "input": [
+      "div#prompt-textarea",
+      "div[contenteditable='true'][role='textbox']",
+      "div[contenteditable='true'][aria-label='Chat with ChatGPT']",
+      "textarea[aria-label='Chat with ChatGPT']",
+      "textarea[placeholder*='Ask anything']"
+    ],
+    "send": [
+      "button[data-testid='send-button']",
+      "button#composer-submit-button",
+      "button[aria-label='Send prompt']"
+    ],
+    "response": [
+      "div[data-message-author-role='assistant']",
+      "div.markdown.prose",
+      "article div[data-message-author-role='assistant']"
+    ],
+    "completion": [
+      "button[data-testid='stop-button']",
+      "button[aria-label='Stop generating']"
+    ],
+    "blocked": [
+      "div[data-testid='rate-limit-message']",
+      "div.captcha-container",
+      "iframe[src*='captcha']"
+    ],
+    "loginError": [
+      "a[href*='/auth/login']",
+      "a[href*='/auth/signup']"
+    ]
+  }
+}

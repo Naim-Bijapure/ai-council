@@ -20,7 +20,10 @@ const ERROR_LABELS: Record<string, string> = {
   rate_limited: "Rate limited",
   captcha: "CAPTCHA required",
   demo_error: "Demo error",
-  cancelled: "Cancelled"
+  config_error: "Selector config error",
+  send_failed: "Failed to send prompt",
+  cancelled: "Cancelled",
+  timeout: "Timed out"
 };
 
 export function formatAppName(appKey: AppKey): string {
