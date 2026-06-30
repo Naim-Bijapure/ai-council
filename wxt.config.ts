@@ -23,7 +23,8 @@ export default defineConfig({
       "https://chat.qwen.ai/*",
       "https://kimi.moonshot.cn/*",
       "https://www.kimi.com/*",
-      "https://kimi.com/*"
+      "https://kimi.com/*",
+      "https://www.perplexity.ai/*"
     ],
     action: {
       default_title: "Open AI Council"

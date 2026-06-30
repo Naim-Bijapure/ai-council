@@ -1,0 +1,27 @@
+{
+  "appKey": "perplexity",
+  "_comment": "Placeholders pending DOM inspection. Run scripts/dom-inspector.js in the Perplexity console to extract structure, then update selectors. App uses contenteditable input similar to Kimi.",
+  "selectors": {
+    "input": [
+      "div[contenteditable='true'][role='textbox']",
+      "div[contenteditable='true']",
+      "textarea[placeholder*='Ask']"
+    ],
+    "send": [
+      "button[aria-label='Submit']",
+      "button[aria-label='Send']",
+      "button[type='submit']"
+    ],
+    "response": [
+      "div[data-testid='answer']",
+      "div.answer-container",
+      "div.prose"
+    ],
+    "completion": [],
+    "blocked": [],
+    "loginError": [
+      "a[href*='login']",
+      "a[href*='signin']"
+    ]
+  }
+}

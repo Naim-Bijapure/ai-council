@@ -74,7 +74,8 @@ export const LOGIN_URL_PATTERNS: Record<AppKey, string[]> = {
   gemini: ["accounts.google.com"],
   deepseek: ["/sign_in", "/sign_up"],
   qwen: ["/login"],
-  kimi: ["/login"]
+  kimi: ["/login"],
+  perplexity: ["/login", "/signin"]
 };
 
 export type ProbeMode = "static" | "live";

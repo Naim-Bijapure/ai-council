@@ -31,6 +31,10 @@ The system SHALL store app-specific DOM selector values in editable JSON config 
 - **WHEN** the Kimi adapter is built
 - **THEN** it reads DOM lookup values from a Kimi JSON selector config file
 
+#### Scenario: Perplexity selector config exists
+- **WHEN** the Perplexity adapter is built
+- **THEN** it reads DOM lookup values from a Perplexity JSON selector config file at `config/selectors/perplexity.json`
+
 #### Scenario: Native CSS only
 - **WHEN** a selector value is loaded from config
 - **THEN** it is valid for native `document.querySelector` and does not use Playwright-style pseudo-selectors such as `:has-text()` or `:has()`

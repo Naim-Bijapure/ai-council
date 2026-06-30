@@ -59,6 +59,16 @@
       "automationRoles": ["agent", "judge"],
       "loginUrlPatterns": ["/login"],
       "enabled": true
+    },
+    {
+      "key": "perplexity",
+      "displayName": "Perplexity",
+      "domain": "www.perplexity.ai",
+      "matchPatterns": ["https://www.perplexity.ai/*"],
+      "newChatUrl": "https://www.perplexity.ai/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/login", "/signin"],
+      "enabled": true
     }
   ]
 }

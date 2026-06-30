@@ -9,7 +9,7 @@ The system SHALL define a shared registry of supported AI Council apps with stab
 
 #### Scenario: Registry exposes all supported apps
 - **WHEN** the side panel or background requests the supported app list
-- **THEN** the registry returns ChatGPT, Claude, Gemini, DeepSeek, Qwen, and Kimi
+- **THEN** the registry returns ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi, and Perplexity
 
 #### Scenario: Registry entries include routing data
 - **WHEN** an app entry is read from the registry
