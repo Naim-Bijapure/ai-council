@@ -2,7 +2,9 @@
 
 A Chrome/Brave extension built with WXT, React, TypeScript, and Manifest V3.
 
-The extension automates a fixed AI Council workflow: it sends your prompt to ChatGPT (agent), extracts the response, builds a structured judge prompt, submits it to DeepSeek (judge), confirms the message was sent, and captures the DeepSeek conversation permalink. The judge response is never captured — you read the verdict directly in the DeepSeek tab.
+The extension automates a configurable AI Council workflow: it sends your prompt to one or more selected LLM **agents** in parallel (ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi), extracts each response, builds a structured judge prompt from the successful responses, submits it to a selected **judge** app, confirms the message was sent, and captures the judge's conversation permalink. The judge response is never captured — you read the verdict directly in the judge tab.
+
+Which apps are available as agents, as judge, and how they are configured is driven entirely by `config/apps.json` and the per-app `config/selectors/*.json` files.
 
 ## Tech Stack
 
@@ -12,6 +14,7 @@ The extension automates a fixed AI Council workflow: it sends your prompt to Cha
 - Manifest V3 for the Chrome extension runtime
 - `chrome.storage.sync` for lightweight preferences
 - IndexedDB for local session history
+- JSON-driven app registry and selector configs (no hardcoded app lists)
 
 ## Setup
 
@@ -25,7 +28,7 @@ npm install
 
 ### Manual dev mode (recommended for real-site testing)
 
-This mode builds the extension and watches files without launching a browser. Use it when you need to test against real ChatGPT and DeepSeek logins in your existing browser profile.
+This mode builds the extension and watches files without launching a browser. Use it when you need to test against real logged-in LLM apps in your existing browser profile.
 
 ```bash
 npm run dev:manual
@@ -33,7 +36,7 @@ npm run dev:manual
 
 Then:
 
-1. Open your normal Brave/Chrome (the profile where you're logged in to ChatGPT and DeepSeek).
+1. Open your normal Brave/Chrome (the profile where you're logged in to the LLM apps you want to use).
 2. Go to `chrome://extensions` (or `brave://extensions`).
 3. Enable **Developer mode** (top-right toggle).
 4. Click **Load unpacked**.
@@ -60,41 +63,60 @@ npm run dev:brave    # Flatpak Brave (fresh temp profile, no logins)
 
 Auto-launch mode starts a clean browser profile — use it for manifest/UI testing only, not for real site automation.
 
-## Test The Workflow
+## App Configuration
 
-### Prerequisites
+Supported apps are listed in `config/apps.json`. Each entry defines its key, display name, domain, host match patterns, new-chat URL, and which automation roles it supports.
 
-- You must be **logged in to ChatGPT** (`chatgpt.com`) and **DeepSeek** (`chat.deepseek.com`) in the browser profile you use for testing.
-- Run `npm run dev:manual` and load the extension as described above.
+```json
+{
+  "apps": [
+    {
+      "key": "chatgpt",
+      "displayName": "ChatGPT",
+      "domain": "chat.openai.com",
+      "matchPatterns": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
+      "newChatUrl": "https://chatgpt.com/",
+      "automationRoles": ["agent", "judge"],
+      "loginUrlPatterns": ["/auth/login", "/auth/signup"],
+      "enabled": true
+    }
+  ]
+}
+```
 
-### Run diagnostics
+| Field | Required | Purpose |
+|---|---|---|
+| `key` | Yes | Stable identifier used in selectors, preferences, and history |
+| `displayName` | Yes | Human-readable name shown in the side panel |
+| `domain` | Yes | Hostname used to match the active tab against an app |
+| `matchPatterns` | Yes | Host permissions / content-script match patterns |
+| `newChatUrl` | Yes | URL the runner opens to start a fresh conversation |
+| `automationRoles` | Yes | Subset of `["agent", "judge"]` — controls availability in the UI |
+| `loginUrlPatterns` | Optional | URL substrings that indicate a not-logged-in state |
+| `enabled` | Optional (default `true`) | Set to `false` to hide the app from the UI |
 
-Before running the full council, verify that the extension can detect the chat UIs:
+### Adding or removing an app
 
-1. Open the side panel.
-2. Click **Run diagnostics**.
-3. The extension opens ChatGPT and DeepSeek tabs and reports Ready/error status for each.
-4. If either reports an error, inspect the real DOM and update the selector JSON (see below).
+To add a new app:
 
-### Run the council
+1. Add a new entry to `config/apps.json` with the fields above.
+2. Add a corresponding `config/selectors/<key>.json` with native-CSS selectors.
+3. Add a new WXT content-script entrypoint under `entrypoints/<key>.content.ts` that wires `createContentScriptBridge` to `runAgent` / `runJudge` from `utils/automation/genericAdapter.ts`.
+4. Add the new match pattern to `wxt.config.ts` `hostPermissions`.
 
-1. Enter a prompt in the textarea.
-2. Click **Run council**.
-3. The extension opens ChatGPT, sends your prompt, waits for the response, extracts it.
-4. It builds a structured judge prompt and sends it to DeepSeek.
-5. Once the judge prompt is sent, the panel shows **"Judge is running in DeepSeek"** with a **Switch to judge tab** button.
-6. Click **Switch to judge tab** to open the DeepSeek conversation and read the verdict.
-7. Click **New question** to reset and start over.
-8. Use **Cancel** during execution to abort the run.
-9. Check the **History** tab for saved sessions. Rows with a captured judge URL are tappable; rows with `Judge URL unavailable` are dimmed.
+To remove an app, set its `enabled: false` (or delete its entry) — the side panel and the runner will skip it on the next build.
 
 ## Selector Configuration
 
-DOM selectors for ChatGPT and DeepSeek are stored in editable JSON files:
+DOM selectors for each app live in editable JSON files under `config/selectors/`:
 
 ```text
 config/selectors/chatgpt.json
+config/selectors/claude.json
 config/selectors/deepseek.json
+config/selectors/gemini.json
+config/selectors/kimi.json
+config/selectors/qwen.json
 ```
 
 Each file contains ordered selector arrays (native CSS only — no `:has-text()` or `:has()` pseudo-selectors). The adapter tries each selector in priority order until one matches a live element.
@@ -114,13 +136,52 @@ Each file contains ordered selector arrays (native CSS only — no `:has-text()`
 
 If the extension reports `dom_error` or `not_logged_in` incorrectly:
 
-1. Open ChatGPT or DeepSeek in your browser.
+1. Open the affected app in your browser.
 2. Inspect the chat input element, send button, response container, and stop button.
 3. Copy their CSS selectors into the corresponding JSON file.
 4. Reload the extension (`Alt+R` or via `chrome://extensions`).
 5. Run diagnostics again to verify.
 
 The selector JSON is bundled at build time. After editing, the extension must be rebuilt (`npm run dev:manual` auto-rebuilds on file change).
+
+## Test The Workflow
+
+### Prerequisites
+
+- You must be **logged in** to the apps you want to use in the browser profile you use for testing:
+  - ChatGPT — `chatgpt.com`
+  - Claude — `claude.ai`
+  - Gemini — `gemini.google.com`
+  - DeepSeek — `chat.deepseek.com`
+  - Qwen — `chat.qwen.ai`
+  - Kimi — `kimi.moonshot.cn`
+- Run `npm run dev:manual` and load the extension as described above.
+
+### Run diagnostics
+
+Before running the full council, verify that the extension can detect the chat UIs:
+
+1. Open the side panel.
+2. Pick one or more agents in the **Agents** section.
+3. Click **Run diagnostics**.
+4. The extension opens tabs for the selected agents and reports Ready/error status for each.
+5. If any report an error, inspect the real DOM and update that app's selector JSON.
+
+### Run the council
+
+1. Tick one or more **Agents**.
+2. Pick the **Judge** app from the dropdown (the selected judge is automatically excluded from the agent list).
+3. Enter a prompt in the textarea.
+4. Click **Run council**.
+5. The extension opens tabs for each agent, sends your prompt in parallel, waits for each response, and extracts it.
+6. It builds a structured judge prompt from the successful responses and sends it to the judge app.
+7. Once the judge prompt is sent, the panel shows **"Judge is running in [App Name]"** with a **Switch to judge tab** button.
+8. Click **Switch to judge tab** to open the judge's conversation and read the verdict.
+9. Click **New question** to reset and start over.
+10. Use **Cancel** during execution to abort the run.
+11. Check the **History** tab for saved sessions. Each row shows the timestamp, status, agent count, and judge app. Rows with a captured judge URL are tappable; rows with `Judge URL unavailable` are dimmed/non-tappable.
+
+Your agent and judge selections are saved to `chrome.storage.sync` and restored on the next side-panel open.
 
 ## Timeouts
 
@@ -135,11 +196,10 @@ The selector JSON is bundled at build time. After editing, the extension must be
 
 ## Known Limitations
 
-- Only ChatGPT (agent) and DeepSeek (judge) are automated in this phase. Claude, Gemini, Qwen, and Kimi are not yet supported.
-- The DeepSeek judge response is never captured or stored. The user reads it directly in the DeepSeek tab.
-- If DeepSeek doesn't change its URL within 30 seconds of sending the judge prompt, `judgeChatUrl` is stored as null and the history row is dimmed/non-tappable.
+- The judge response is never captured or stored. The user reads it directly in the judge app's tab.
+- If the judge app doesn't change its URL within 30 seconds of sending the judge prompt, `judgeChatUrl` is stored as null and the history row is dimmed/non-tappable.
 - One session at a time. The submit button is disabled while a session is in progress.
-- Selector values are best-effort placeholders. Real DOM values must be updated after inspecting the actual ChatGPT and DeepSeek pages.
+- Selector values for Claude, Gemini, Qwen, and Kimi are placeholders. Real DOM values must be updated after inspecting each app's live UI (the diagnostic flow helps find the right selectors).
 
 ## Build
 
@@ -186,37 +246,45 @@ Do not use the zip file with Load unpacked; the zip is for distribution/upload w
 ## Source Layout
 
 ```text
-entrypoints/
-  background.ts              # MV3 background service worker, fixed-flow orchestration
-  chatgpt.content.ts         # ChatGPT content script (agent adapter)
-  deepseek.content.ts        # DeepSeek content script (judge adapter)
-  sidepanel/
-    index.html               # Side panel document shell
-    main.tsx                 # React side panel mount point
-    App.tsx                  # Council and History UI
-    style.css                # Side panel styles
 config/
+  apps.json                    # Supported apps + automation roles (data)
   selectors/
-    chatgpt.json             # ChatGPT DOM selectors (native CSS, ordered arrays)
-    deepseek.json            # DeepSeek DOM selectors (native CSS, ordered arrays)
+    chatgpt.json               # ChatGPT DOM selectors
+    claude.json                # Claude DOM selectors
+    deepseek.json              # DeepSeek DOM selectors
+    gemini.json                # Gemini DOM selectors
+    kimi.json                  # Kimi DOM selectors
+    qwen.json                  # Qwen DOM selectors
+entrypoints/
+  background.ts                # MV3 background service worker, multi-agent orchestrator
+  chatgpt.content.ts           # ChatGPT content script
+  claude.content.ts            # Claude content script
+  deepseek.content.ts          # DeepSeek content script
+  gemini.content.ts            # Gemini content script
+  kimi.content.ts              # Kimi content script
+  qwen.content.ts              # Qwen content script
+  sidepanel/
+    index.html                 # Side panel document shell
+    main.tsx                   # React side panel mount point
+    App.tsx                    # Council, diagnostics, and History UI
+    style.css                  # Side panel styles
 utils/
-  appRegistry.ts             # Supported AI app metadata + automation roles
-  format.ts                  # UI formatting helpers
-  history.ts                 # IndexedDB session storage
-  judgePrompt.ts             # Structured judge prompt builder
-  preferences.ts             # chrome.storage.sync preference helpers
-  types.ts                   # Shared TypeScript contracts
+  appRegistry.ts               # Loads config/apps.json, exposes app/role helpers
+  format.ts                    # UI formatting helpers
+  history.ts                   # IndexedDB session storage
+  judgePrompt.ts               # Structured judge prompt builder
+  preferences.ts               # chrome.storage.sync preference helpers
+  types.ts                     # Shared TypeScript contracts
   automation/
-    types.ts                 # Automation types (timeouts, results, selectors)
-    messages.ts              # Typed runtime message bridge (bg ↔ content scripts)
-    selectorConfig.ts        # Selector JSON loader and validator
-    readiness.ts             # Login grace period + input detection
-    adapterHelpers.ts        # Shared DOM helpers (inject, send, extract)
-    chatgptAdapter.ts        # ChatGPT agent adapter (inject, wait, extract)
-    deepseekAdapter.ts       # DeepSeek judge adapter (inject, send, confirm)
-    contentBridge.ts         # Content script message bridge factory
-    diagnostics.ts           # Background diagnostic helpers (open tabs, handshake)
-    fixedFlowRunner.ts       # Fixed ChatGPT→DeepSeek workflow runner
-wxt.config.ts                # WXT and generated manifest configuration
-tsconfig.json                # TypeScript configuration
+    types.ts                   # Automation types (timeouts, results, selectors)
+    messages.ts                # Typed runtime message bridge (bg ↔ content scripts)
+    selectorConfig.ts          # Selector JSON loader (all 6 apps)
+    readiness.ts               # Login grace period + input detection
+    adapterHelpers.ts          # Shared DOM helpers (inject, send, extract)
+    genericAdapter.ts          # Single adapter driving any app from its selector JSON
+    contentBridge.ts           # Content script message bridge factory
+    diagnostics.ts             # Background diagnostic helpers (open tabs, handshake)
+    councilRunner.ts           # Multi-agent orchestrator (replaces fixedFlowRunner)
+wxt.config.ts                  # WXT and generated manifest configuration
+tsconfig.json                  # TypeScript configuration
 ```

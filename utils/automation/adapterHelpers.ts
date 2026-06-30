@@ -19,12 +19,17 @@ export function isContentEditable(element: HTMLElement): boolean {
 
 export function setInputText(element: HTMLElement, text: string): void {
   if (isContentEditable(element)) {
-    element.focus();
+    // Try to focus (works in foreground; no-op in background but doesn't throw)
+    try {
+      element.focus();
+    } catch {
+      // ignore
+    }
 
     // Clear existing content
     element.textContent = "";
 
-    // Method 1: execCommand insertText (best for ProseMirror)
+    // Method 1: execCommand insertText (best for ProseMirror, needs focus)
     if (typeof document.execCommand === "function") {
       const selection = window.getSelection();
       if (selection) {
@@ -36,9 +41,26 @@ export function setInputText(element: HTMLElement, text: string): void {
       document.execCommand("insertText", false, text);
     }
 
-    // If execCommand didn't work, fall back to direct manipulation
+    // If execCommand didn't work (e.g. background tab), use beforeinput + direct set
     if ((element.textContent ?? "").trim() !== text.trim()) {
-      element.textContent = text;
+      element.textContent = "";
+
+      // Dispatch beforeinput — ProseMirror and similar editors listen for this
+      element.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          data: text,
+          inputType: "insertText"
+        })
+      );
+
+      // Set text content directly
+      if ((element.textContent ?? "").trim() !== text.trim()) {
+        element.textContent = text;
+      }
+
+      // Dispatch input event so frameworks pick up the change
       element.dispatchEvent(
         new InputEvent("input", {
           bubbles: true,
@@ -55,7 +77,14 @@ export function setInputText(element: HTMLElement, text: string): void {
     } else {
       element.value = text;
     }
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    // Use InputEvent (not generic Event) so React/framework onChange handlers fire
+    element.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: text,
+        inputType: "insertText"
+      })
+    );
     element.dispatchEvent(new Event("change", { bubbles: true }));
   } else if (element instanceof HTMLInputElement) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -64,7 +93,13 @@ export function setInputText(element: HTMLElement, text: string): void {
     } else {
       element.value = text;
     }
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: text,
+        inputType: "insertText"
+      })
+    );
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }
 }
@@ -78,7 +113,9 @@ export async function waitForInput(
 
   while (Date.now() < deadline) {
     const element = queryFirstSelector(selectors) as HTMLElement | null;
-    if (element && element.offsetParent !== null) {
+    // In background tabs, offsetParent can be null even for visible elements,
+    // so accept any element that exists and has non-zero size or is in the DOM
+    if (element && (element.offsetParent !== null || element.isConnected)) {
       return element;
     }
     await sleep(pollIntervalMs);
@@ -124,7 +161,17 @@ export function isDisabled(element: HTMLElement): boolean {
 }
 
 export function clickElement(element: HTMLElement): void {
+  // Try native click first
   element.click();
+
+  // Also dispatch a proper MouseEvent for frameworks that need it
+  element.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      view: window
+    })
+  );
 }
 
 export async function waitForElement(

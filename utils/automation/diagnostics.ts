@@ -85,7 +85,8 @@ export async function openTabAndListenForReady(
   url: string,
   tabLoadTimeoutMs: number,
   contentReadyTimeoutMs: number,
-  appKey: AppKey
+  appKey: AppKey,
+  focused = true
 ): Promise<TabLoadResult> {
   return new Promise<TabLoadResult>((resolve) => {
     let settled = false;
@@ -186,8 +187,9 @@ export async function openTabAndListenForReady(
     browser.runtime.onMessage.addListener(messageListener);
     browser.tabs.onUpdated.addListener(tabListener);
 
-    // Create the tab
-    void browser.tabs.create({ url, active: true }).then((tab) => {
+    // Create the tab. When showAgentWindows is true the tab is active (visible);
+    // when false it opens in the background so the user stays on the current tab.
+    void browser.tabs.create({ url, active: focused }).then((tab) => {
       tabId = tab.id ?? null;
 
       // Fast path: check if tab is already complete
@@ -209,6 +211,19 @@ export async function openTabAndListenForReady(
       }
     });
   });
+}
+
+/**
+ * Opens an agent tab in the same browser window with `active: false` so it
+ * is visible in the tab bar but does not steal focus from the user's tab.
+ */
+export async function openAgentTabInUnfocusedWindow(
+  url: string,
+  tabLoadTimeoutMs: number,
+  contentReadyTimeoutMs: number,
+  appKey: AppKey
+): Promise<TabLoadResult> {
+  return openTabAndListenForReady(url, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, false);
 }
 
 export async function openTabAndWaitForLoad(url: string, timeoutMs: number): Promise<Browser.tabs.Tab> {

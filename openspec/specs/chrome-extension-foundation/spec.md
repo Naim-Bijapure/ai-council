@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the baseline Chrome extension scaffold, development workflow, and initial least-privilege behavior for this project.
-
 ## Requirements
-
 ### Requirement: TypeScript extension scaffold
 The project SHALL provide a TypeScript-based Chrome extension scaffold using WXT, React, and Manifest V3.
 
@@ -69,31 +67,20 @@ The project SHALL document the basic local setup and Chrome load-unpacked flow.
 - **THEN** they SHALL be able to install dependencies, build the extension, and identify the build directory to load in Chrome
 
 ### Requirement: ChatGPT And DeepSeek Host Access
-The extension SHALL declare only the ChatGPT and DeepSeek host permissions required for this fixed automation round.
+The extension SHALL declare host permissions for all supported apps configured in `config/apps.json`.
 
-#### Scenario: ChatGPT hosts are permitted
+#### Scenario: All configured app hosts are permitted
 - **WHEN** the Chrome-targeted manifest is generated
-- **THEN** the manifest includes host access for `https://chat.openai.com/*` and `https://chatgpt.com/*`
+- **THEN** the manifest includes host access for every app listed in `config/apps.json` with `enabled: true`
 
-#### Scenario: DeepSeek host is permitted
-- **WHEN** the Chrome-targeted manifest is generated
-- **THEN** the manifest includes host access for `https://chat.deepseek.com/*`
+### Requirement: All Supported App Content Script Registration
+The extension SHALL register content scripts for all supported apps through the WXT entrypoint structure.
 
-#### Scenario: Other chat app hosts remain unpermitted
-- **WHEN** the Chrome-targeted manifest is generated for this change
-- **THEN** it does not add host permissions for Claude, Gemini, Qwen, or Kimi
-
-### Requirement: ChatGPT And DeepSeek Content Script Registration
-The extension SHALL register content scripts for ChatGPT and DeepSeek pages through the WXT entrypoint structure.
-
-#### Scenario: ChatGPT content script is included in build output
+#### Scenario: All content scripts included in build output
 - **WHEN** a developer runs the Chrome build
-- **THEN** the generated extension output includes a content script entry that matches the ChatGPT host patterns
-
-#### Scenario: DeepSeek content script is included in build output
-- **WHEN** a developer runs the Chrome build
-- **THEN** the generated extension output includes a content script entry that matches the DeepSeek host pattern
+- **THEN** the generated extension output includes a content script entry for each supported app's match patterns
 
 #### Scenario: Unsupported pages are not matched
 - **WHEN** the generated content script configuration is inspected
-- **THEN** it does not match unrelated websites or unsupported chat apps
+- **THEN** it does not match unrelated websites
+

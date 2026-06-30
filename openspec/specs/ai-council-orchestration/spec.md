@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the background orchestration behavior for AI Council sessions.
-
 ## Requirements
-
 ### Requirement: Run Request Validation
 The background orchestrator SHALL validate every council run request before creating a session.
 
@@ -76,65 +74,70 @@ The background orchestrator SHALL broadcast active session changes to the side p
 - **WHEN** the side panel connects or asks for current state
 - **THEN** the background returns the active session snapshot or an idle state
 
-### Requirement: Fixed ChatGPT To DeepSeek Workflow
-The background orchestrator SHALL run a fixed automation workflow with ChatGPT as the only agent and DeepSeek as the only judge.
+### Requirement: Multi-Agent Council Workflow
+The background orchestrator SHALL run a configurable multi-agent workflow where the user selects which apps run as agents and which app runs as judge.
 
-#### Scenario: Valid fixed-flow run starts
-- **WHEN** the side panel submits a valid prompt for the fixed-flow run
-- **THEN** the orchestrator starts a session using ChatGPT as the agent and DeepSeek as the judge
+#### Scenario: Valid multi-agent run starts
+- **WHEN** the side panel submits a valid prompt with selected agents and judge
+- **THEN** the orchestrator starts a session using the selected agents and judge
 
-#### Scenario: App selections are not required
-- **WHEN** the fixed-flow side panel starts a run
-- **THEN** the orchestrator does not require user-selected agent or judge app lists
+#### Scenario: Agents run in parallel
+- **WHEN** the session starts
+- **THEN** the orchestrator opens tabs for all selected agents concurrently and sends the prompt to each
 
-### Requirement: ChatGPT Agent Then DeepSeek Judge Order
-The background orchestrator SHALL complete the ChatGPT agent step before submitting the DeepSeek judge step.
+### Requirement: Agent Then Judge Order
+The background orchestrator SHALL complete all agent steps before submitting the judge step.
 
-#### Scenario: ChatGPT response succeeds
-- **WHEN** ChatGPT automation returns response text
-- **THEN** the orchestrator builds the judge prompt from the original user prompt and ChatGPT response
+#### Scenario: At least one agent succeeds
+- **WHEN** at least one agent returns response text
+- **THEN** the orchestrator builds the judge prompt from all successful agent responses
 
-#### Scenario: ChatGPT response fails
-- **WHEN** ChatGPT automation resolves as timeout or error
-- **THEN** the orchestrator does not submit a DeepSeek judge prompt and completes the session with the recorded ChatGPT failure
+#### Scenario: All agents fail
+- **WHEN** all agents resolve as timeout or error
+- **THEN** the orchestrator does not submit a judge prompt and completes with `partial_failure` status
 
-#### Scenario: DeepSeek judge prompt sent
-- **WHEN** DeepSeek automation confirms the judge prompt was sent
+#### Scenario: Judge prompt sent
+- **WHEN** the judge content script confirms the judge prompt was sent
 - **THEN** the orchestrator proceeds to judge chat URL capture and the minimal handoff state
 
 ### Requirement: Judge Chat URL Capture
-The background orchestrator SHALL capture the DeepSeek conversation permalink using a `chrome.tabs.onUpdated` listener scoped to the judge tab.
+The background orchestrator SHALL capture the judge conversation permalink by attaching a `chrome.tabs.onUpdated` listener scoped to the judge tab *before* the judge prompt is sent, so that SPA URL changes are not missed.
 
 #### Scenario: Permalink captured
-- **WHEN** the judge tab URL changes away from the new-chat URL pattern within 30 seconds of injection
+- **WHEN** the judge tab URL changes away from the new-chat URL pattern within 30 seconds of the listener being attached
 - **THEN** the orchestrator stores that URL as `judgeChatUrl` and removes the listener
 
-#### Scenario: Permalink fallback read
+#### Scenario: URL already changed before listener attached
+- **WHEN** the tab URL has already changed from the new-chat URL at the time the listener is attached
+- **THEN** the orchestrator reads the current tab URL and stores it as `judgeChatUrl` without waiting for an onUpdated event
+
+#### Scenario: Permalink not captured
 - **WHEN** no URL change is detected within 30 seconds
-- **THEN** the orchestrator reads the current judge tab URL one final time and stores it if it has changed, otherwise stores `judgeChatUrl: null`
+- **THEN** the orchestrator stores `judgeChatUrl: null`
 
 #### Scenario: Null URL still completes the session
 - **WHEN** `judgeChatUrl` is stored as null
 - **THEN** the session still completes and its history row is visually dimmed as non-tappable
 
 ### Requirement: No Judge Response Capture
-The orchestrator SHALL NOT wait for, extract, or store the DeepSeek judge response text.
+The orchestrator SHALL NOT wait for, extract, or store the judge response text.
 
 #### Scenario: Judge response is not captured
-- **WHEN** DeepSeek confirms the judge prompt was sent
-- **THEN** the orchestrator does not wait for generation completion, does not extract judge response text, and does not store judge response text
+- **WHEN** the judge prompt is sent and confirmed
+- **THEN** the orchestrator does not wait for generation completion or extract judge response text
 
-### Requirement: Fixed Workflow Status Broadcasts
-The background orchestrator SHALL broadcast ChatGPT agent and DeepSeek judge status changes through the side-panel snapshot model.
+### Requirement: Judge Opens In Active Window
+The background orchestrator SHALL open the judge step in the same browser window that currently hosts the extension side panel, instead of opening it in a separate new window.
 
-#### Scenario: ChatGPT progresses
-- **WHEN** ChatGPT moves through readiness, injection, waiting, and completion
-- **THEN** the side panel receives updated snapshots for the agent step
+#### Scenario: Judge opens in active window
+- **WHEN** the orchestrator starts the judge step
+- **THEN** it determines the active window of the side panel and opens the judge app there
 
-#### Scenario: DeepSeek progresses
-- **WHEN** DeepSeek moves through readiness, injection, and send confirmation
-- **THEN** the side panel receives updated snapshots for the judge step
+#### Scenario: Judge reuses current tab if already on judge app
+- **WHEN** the active tab in the side panel window is already on the judge app's domain
+- **THEN** the orchestrator navigates that tab to the judge new-chat URL instead of opening a new tab
 
-#### Scenario: Fixed workflow fails
-- **WHEN** ChatGPT or DeepSeek automation fails with a known error reason
-- **THEN** the side panel receives an updated snapshot showing the failure without crashing the extension
+#### Scenario: Judge opens new tab in active window when current tab is not judge app
+- **WHEN** the active tab in the side panel window is not on the judge app's domain
+- **THEN** the orchestrator opens a new tab for the judge app within the same active window
+

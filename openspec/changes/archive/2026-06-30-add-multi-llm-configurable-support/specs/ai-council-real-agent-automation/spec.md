@@ -1,27 +1,15 @@
-# ai-council-real-agent-automation Specification
+## MODIFIED Requirements
 
-## Purpose
-
-Defines the reusable background tab runner behavior that drives real automation steps for any configured app, including readiness handshake, timeouts, cancellation, and result normalization.
-## Requirements
 ### Requirement: Fixed App Tab Runner
 The system SHALL provide reusable background tab runner behavior for any configured app as agent or judge.
 
-#### Scenario: Agent tab runner starts as background tab
+#### Scenario: Agent tab runner starts
 - **WHEN** the workflow starts the agent step for a selected app
-- **THEN** the tab runner opens a new tab with `active: false` in the current window for that app's new-chat URL, and waits for content-script readiness
+- **THEN** the tab runner opens a new tab for that app's new-chat URL and waits for content-script readiness
 
-#### Scenario: Agent tab is briefly activated for injection
-- **WHEN** the agent content script is ready and the runner is about to send the AGENT_RUN command
-- **THEN** the tab runner activates the agent tab so that focus-dependent DOM operations (execCommand, click) work without Chrome background-tab throttling, then switches back to the user's original tab after injection
-
-#### Scenario: Judge tab runner starts in active window
+#### Scenario: Judge tab runner starts
 - **WHEN** the workflow starts the judge step
-- **THEN** the tab runner opens the judge app's new-chat URL in the active window (reusing the current tab if it matches the judge app, otherwise opening a new tab in that window) and waits for content-script readiness
-
-#### Scenario: Agent tab creation fallback
-- **WHEN** creating a background tab fails
-- **THEN** the tab runner falls back to opening a new tab with `active: true` in the current window
+- **THEN** the tab runner opens a new tab for the judge app's new-chat URL and waits for content-script readiness
 
 ### Requirement: Content Script Readiness Handshake
 The tab runner SHALL verify content-script readiness via a CONTENT_READY handshake before sending automation commands.
@@ -67,15 +55,3 @@ The tab runner SHALL normalize content-script outcomes into the session model fo
 #### Scenario: Adapter error returned
 - **WHEN** a content script returns an adapter error reason
 - **THEN** the active step is marked `error` with that reason
-
-### Requirement: Automation Cancellation
-The tab runner SHALL stop pending automation work when the user cancels the active council session.
-
-#### Scenario: User cancels during agent automation
-- **WHEN** the side panel sends `CANCEL_COUNCIL` during an agent step
-- **THEN** pending timers and listeners for that app are cleaned up, the judge tab is closed if opened, and the session is marked cancelled
-
-#### Scenario: User cancels during judge automation
-- **WHEN** the side panel sends `CANCEL_COUNCIL` during the judge step
-- **THEN** pending timers and listeners for the judge app are cleaned up and the session is marked cancelled
-

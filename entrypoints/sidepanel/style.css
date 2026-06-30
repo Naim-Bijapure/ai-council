@@ -355,7 +355,8 @@ progress::-webkit-progress-value {
   border-left-color: #2a6df4;
 }
 
-.agent-card.done {
+.agent-card.done,
+.agent-card.sent {
   border-left-color: #12a66a;
 }
 

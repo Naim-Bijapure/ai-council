@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the side panel user experience for running AI Council sessions and browsing local history.
-
 ## Requirements
-
 ### Requirement: Council Input State
 The side panel SHALL provide a Council tab where the user can enter a prompt, select one or more agent apps, select a judge app, and start a council run.
 
@@ -21,6 +19,21 @@ The side panel SHALL provide a Council tab where the user can enter a prompt, se
 - **WHEN** saved agent or judge preferences exist
 - **THEN** the side panel initializes the Council controls from those preferences
 
+### Requirement: Configurable Agent And Judge Selection
+The side panel SHALL present agent checkboxes and a judge dropdown populated from the app configuration, replacing the fixed ChatGPT→DeepSeek flow.
+
+#### Scenario: Agent checkboxes shown
+- **WHEN** the Council tab is displayed in the idle state
+- **THEN** it shows a checkbox for each app configured with agent role support
+
+#### Scenario: Judge dropdown shown
+- **WHEN** the Council tab is displayed in the idle state
+- **THEN** it shows a dropdown listing each app configured with judge role support
+
+#### Scenario: Submit validation
+- **WHEN** the user clicks Run council
+- **THEN** the submit is disabled if no prompt is entered, no agent is selected, or no judge is selected
+
 ### Requirement: Council Running State
 The side panel SHALL show live execution progress after a valid council run starts.
 
@@ -35,6 +48,17 @@ The side panel SHALL show live execution progress after a valid council run star
 #### Scenario: Progress reflects resolved agents
 - **WHEN** an agent reaches `done`, `timeout`, or `error`
 - **THEN** the progress indicator updates the completed count against the total selected agents
+
+### Requirement: Multi-Agent Running State
+The side panel SHALL show per-agent progress cards and a progress bar during execution.
+
+#### Scenario: Agent cards update live
+- **WHEN** an agent changes status during execution
+- **THEN** the side panel updates that agent's card with the new status and response preview
+
+#### Scenario: Progress bar reflects completion
+- **WHEN** agents resolve one by one
+- **THEN** the progress bar updates to show completed count over total selected agents
 
 ### Requirement: Cancel Active Run
 The side panel SHALL allow the user to cancel an active council run.
@@ -54,6 +78,25 @@ The side panel SHALL show a minimal judge handoff state after agent execution re
 - **WHEN** the user clicks New question in the handoff state
 - **THEN** the side panel clears active run state and returns to the Council input state
 
+### Requirement: Minimal Judge Handoff State
+The side panel SHALL show a minimal judge handoff state once the judge prompt is sent, without displaying the judge response.
+
+#### Scenario: Judge handoff shown
+- **WHEN** the background reports the judge prompt as sent
+- **THEN** the side panel shows "Judge is running in [Judge App Name]" with a "Switch to judge tab" button and a "New question" button
+
+#### Scenario: Switch to judge tab
+- **WHEN** the user clicks "Switch to judge tab"
+- **THEN** the side panel activates the judge tab
+
+#### Scenario: New question resets the panel
+- **WHEN** the user clicks "New question"
+- **THEN** the side panel resets to the configurable input state
+
+#### Scenario: Judge response is not displayed
+- **WHEN** the minimal judge handoff state is shown
+- **THEN** the side panel does not attempt to capture or display the judge response
+
 ### Requirement: History Tab
 The side panel SHALL provide a History tab listing saved council sessions in reverse chronological order.
 
@@ -69,47 +112,6 @@ The side panel SHALL provide a History tab listing saved council sessions in rev
 - **WHEN** the user chooses to clear history
 - **THEN** the side panel asks for confirmation before deleting stored sessions
 
-### Requirement: Fixed Flow Input State
-The side panel SHALL present this phase as a fixed ChatGPT-agent and DeepSeek-judge workflow.
-
-#### Scenario: Fixed apps are visible
-- **WHEN** the Council tab is displayed
-- **THEN** it shows ChatGPT as the agent and DeepSeek as the judge
-
-#### Scenario: App selectors are hidden for fixed phase
-- **WHEN** the fixed-flow phase is active
-- **THEN** the side panel does not require the user to choose agent apps or judge apps
-
-### Requirement: Fixed Flow Running State
-The side panel SHALL show progress for both the ChatGPT agent step and the DeepSeek judge step.
-
-#### Scenario: ChatGPT status shown
-- **WHEN** the ChatGPT agent step changes status
-- **THEN** the side panel updates the ChatGPT status display
-
-#### Scenario: DeepSeek status shown
-- **WHEN** the DeepSeek judge step changes status
-- **THEN** the side panel updates the DeepSeek status display
-
-### Requirement: Minimal Judge Handoff State
-The side panel SHALL show a minimal judge handoff state once the DeepSeek judge prompt is sent and confirmed, without displaying the judge response.
-
-#### Scenario: Judge handoff shown
-- **WHEN** the background reports the DeepSeek judge prompt as sent
-- **THEN** the side panel shows "Judge is running in DeepSeek" with a "Switch to judge tab" button and a "New question" button
-
-#### Scenario: Switch to judge tab
-- **WHEN** the user clicks "Switch to judge tab"
-- **THEN** the side panel activates the DeepSeek judge tab via `chrome.tabs.update`
-
-#### Scenario: New question resets the panel
-- **WHEN** the user clicks "New question"
-- **THEN** the side panel resets to the fixed-flow input state
-
-#### Scenario: Judge response is not displayed
-- **WHEN** the minimal judge handoff state is shown
-- **THEN** the side panel does not attempt to capture or display the DeepSeek judge response
-
 ### Requirement: Automation Errors Display
 The side panel SHALL display ChatGPT and DeepSeek automation failure reasons using readable status text.
 
@@ -120,3 +122,4 @@ The side panel SHALL display ChatGPT and DeepSeek automation failure reasons usi
 #### Scenario: DeepSeek automation error shown
 - **WHEN** the background reports DeepSeek judge execution as `error` with an automation error reason
 - **THEN** the side panel shows a readable DeepSeek error status
+

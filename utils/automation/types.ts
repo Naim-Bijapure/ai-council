@@ -49,7 +49,7 @@ export const DEFAULT_AUTOMATION_TIMEOUTS: AutomationTimeouts = {
   contentReadyMs: 10_000,
   loginGraceMs: 10_000,
   loginPollIntervalMs: 500,
-  sendButtonEnableMs: 3_000,
+  sendButtonEnableMs: 5_000,
   sendButtonPollIntervalMs: 100,
   responseWaitMs: 45_000,
   urlCaptureMs: 30_000

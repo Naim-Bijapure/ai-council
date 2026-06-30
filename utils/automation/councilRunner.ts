@@ -9,7 +9,8 @@ import {
   type JudgeStep,
   type StoredCouncilSession
 } from "../types";
-import { openTabAndListenForReady } from "./diagnostics";
+import { openTabAndListenForReady, openAgentTabInUnfocusedWindow } from "./diagnostics";
+import { getActiveWindowId, findMatchingTabInWindow, getActiveTabIdInWindow } from "./windowContext";
 import type { BgToContentMessage, ContentToBgMessage } from "./messages";
 import { loadSelectorConfig } from "./selectorConfig";
 import {
@@ -25,6 +26,10 @@ export interface CouncilRunnerCallbacks {
   isCancelled: () => boolean;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface ActiveRunState {
   sessionId: string;
   cancelled: boolean;
@@ -33,6 +38,7 @@ interface ActiveRunState {
   messageListeners: Array<() => void>;
   agentTabIds: Map<AppKey, number>;
   judgeTabId: number | null;
+  judgeWindowId: number | null;
 }
 
 export async function runCouncil(
@@ -40,6 +46,12 @@ export async function runCouncil(
   callbacks: CouncilRunnerCallbacks,
   timeouts: AutomationTimeouts = DEFAULT_AUTOMATION_TIMEOUTS
 ): Promise<void> {
+  // Capture the active window and tab before opening agent tabs, so the judge
+  // opens in the same window and we can switch back to the user's tab after
+  // agent injection.
+  const judgeWindowId = await getActiveWindowId();
+  const userTabId = judgeWindowId != null ? await getActiveTabIdInWindow(judgeWindowId) : null;
+
   const state: ActiveRunState = {
     sessionId: session.id,
     cancelled: false,
@@ -47,7 +59,8 @@ export async function runCouncil(
     tabListeners: [],
     messageListeners: [],
     agentTabIds: new Map(),
-    judgeTabId: null
+    judgeTabId: null,
+    judgeWindowId
   };
 
   const update = (patch: Partial<ActiveCouncilSession>): ActiveCouncilSession => {
@@ -87,10 +100,10 @@ export async function runCouncil(
   try {
     if (checkCancelled()) return;
 
-    // Step 1: Open all agent tabs in parallel
+    // Step 1: Open all agent tabs in parallel (background tabs, no focus steal)
     const agentTabResults = await Promise.all(
       agentKeys.map((key) =>
-        openTabAndListenForReady(
+        openAgentTabInUnfocusedWindow(
           getSupportedApp(key).newChatUrl,
           timeouts.tabLoadMs,
           timeouts.contentReadyMs,
@@ -114,8 +127,8 @@ export async function runCouncil(
       session = update({ agentTabUrl: firstLoaded.tabUrl ?? null });
     }
 
-    // Step 2: For each agent, check readiness and run
-    const agentPromises = agentKeys.map(async (key, i) => {
+    // Step 2: Check readiness for each agent
+    const agentReadiness = agentKeys.map((key, i) => {
       const result = agentTabResults[i];
 
       if (!result?.loaded) {
@@ -124,7 +137,7 @@ export async function runCouncil(
           errorReason: "tab_load_timeout",
           completedAt: Date.now()
         });
-        return;
+        return null;
       }
 
       if (!result?.contentReady) {
@@ -133,10 +146,8 @@ export async function runCouncil(
           errorReason: "content_script_timeout",
           completedAt: Date.now()
         });
-        return;
+        return null;
       }
-
-      if (checkCancelled()) return;
 
       const tabId = state.agentTabIds.get(key);
       if (tabId == null) {
@@ -145,32 +156,76 @@ export async function runCouncil(
           errorReason: "tab_load_timeout",
           completedAt: Date.now()
         });
-        return;
+        return null;
       }
+
+      return { key, tabId };
+    });
+
+    if (checkCancelled()) return;
+
+    // Step 3: Sequentially activate each agent tab, inject prompt, and send.
+    // This gives each tab a brief moment of focus so execCommand/click work
+    // reliably (Chrome throttles background tabs). Response detection continues
+    // in the background via MutationObserver.
+    const agentResultPromises: Promise<void>[] = [];
+
+    for (const ready of agentReadiness) {
+      if (!ready) continue;
+      if (checkCancelled()) break;
+
+      const { key, tabId } = ready;
+
+      // Activate the agent tab so injection works without throttling
+      try {
+        await browser.tabs.update(tabId, { active: true });
+      } catch {
+        // ignore — tab might be closed
+      }
+      await sleep(500);
+
+      if (checkCancelled()) break;
 
       updateAgent(key, { status: "injecting", startedAt: Date.now() });
 
-      const adapterResult = await sendAgentRun(key, tabId, session.prompt, timeouts, state);
-      if (checkCancelled()) return;
+      // Start the agent run (sends message + waits for result).
+      // We don't await here — we want to move to the next agent.
+      const resultPromise = sendAgentRun(key, tabId, session.prompt, timeouts, state).then((adapterResult) => {
+        if (checkCancelled()) return;
 
-      if (!adapterResult.success) {
+        if (!adapterResult.success) {
+          updateAgent(key, {
+            status: "error",
+            errorReason: adapterResult.errorReason ?? "dom_error",
+            completedAt: Date.now()
+          });
+          return;
+        }
+
         updateAgent(key, {
-          status: "error",
-          errorReason: adapterResult.errorReason ?? "dom_error",
-          completedAt: Date.now()
+          status: "done",
+          responseText: adapterResult.responseText ?? "",
+          completedAt: adapterResult.completedAt ?? Date.now()
         });
-        return;
-      }
-
-      updateAgent(key, {
-        status: "done",
-        responseText: adapterResult.responseText ?? "",
-        completedAt: adapterResult.completedAt ?? Date.now()
       });
-    });
 
-    // Step 3: Wait for all agents to complete
-    await Promise.all(agentPromises);
+      agentResultPromises.push(resultPromise);
+
+      // Wait for injection + send to complete before moving to next agent
+      await sleep(2000);
+    }
+
+    // Step 4: Switch back to the user's tab
+    if (userTabId != null) {
+      try {
+        await browser.tabs.update(userTabId, { active: true });
+      } catch {
+        // ignore
+      }
+    }
+
+    // Step 5: Wait for all agent results (response detection runs in background)
+    await Promise.all(agentResultPromises);
     if (checkCancelled()) return;
 
     // Step 4: Check if any agent succeeded
@@ -215,13 +270,13 @@ export async function runCouncil(
 
     session = update({ judgePrompt: judgePrompt.text });
 
-    // Step 6: Open judge tab
+    // Step 6: Open judge tab in active window, reusing current tab if it matches judge app
     const judgeKey = session.judgeApp;
-    const judgeResult = await openTabAndListenForReady(
-      getSupportedApp(judgeKey).newChatUrl,
+    const judgeResult = await openJudgeTabAndListenForReady(
+      judgeKey,
+      state.judgeWindowId,
       timeouts.tabLoadMs,
-      timeouts.contentReadyMs,
-      judgeKey
+      timeouts.contentReadyMs
     ).catch(() => null);
 
     if (checkCancelled()) return;
@@ -254,12 +309,23 @@ export async function runCouncil(
 
     updateJudge({ status: "injecting", startedAt: Date.now() });
 
+    // Start URL capture listener BEFORE sending the judge prompt so SPA URL
+    // changes are not missed.
+    const judgeNewChatUrl = getSupportedApp(judgeKey).newChatUrl;
+    const urlCaptureHandle = state.judgeTabId != null
+      ? startJudgeUrlCapture(state.judgeTabId, judgeNewChatUrl, timeouts.urlCaptureMs, state)
+      : null;
+
     const judgeSendResult = state.judgeTabId != null
       ? await sendJudgeRun(judgeKey, state.judgeTabId, judgePrompt.text, timeouts, state)
       : { sent: false, errorReason: "tab_load_timeout" as const };
-    if (checkCancelled()) return;
+    if (checkCancelled()) {
+      urlCaptureHandle?.cancel();
+      return;
+    }
 
     if (!judgeSendResult.sent) {
+      urlCaptureHandle?.cancel();
       updateJudge({
         status: "error",
         errorReason: judgeSendResult.errorReason ?? "send_failed",
@@ -271,10 +337,8 @@ export async function runCouncil(
 
     updateJudge({ status: "sent", completedAt: Date.now() });
 
-    // Step 7: Capture judge URL
-    const judgeUrl = state.judgeTabId != null
-      ? await captureJudgeUrl(state.judgeTabId, getSupportedApp(judgeKey).newChatUrl, timeouts.urlCaptureMs, state)
-      : null;
+    // Step 7: Await the URL capture result (listener was attached before send)
+    const judgeUrl = urlCaptureHandle ? await urlCaptureHandle.promise : null;
     if (checkCancelled()) return;
 
     session = update({ judgeChatUrl: judgeUrl });
@@ -431,6 +495,347 @@ async function captureJudgeUrl(
 
     state.tabListeners.push(removeListener);
     browser.tabs.onUpdated.addListener(listener);
+  });
+}
+
+interface JudgeUrlCaptureHandle {
+  promise: Promise<string | null>;
+  cancel: () => void;
+}
+
+/**
+ * Attaches the tabs.onUpdated listener for judge URL capture BEFORE the judge
+ * prompt is sent, so SPA URL changes are not missed. Also reads the current
+ * tab URL at attach time for race-safety (the URL may have already changed).
+ *
+ * Returns a handle whose `promise` resolves with the captured URL or null,
+ * and a `cancel` function to clean up the listener early.
+ */
+function startJudgeUrlCapture(
+  tabId: number,
+  newChatUrl: string,
+  timeoutMs: number,
+  state: ActiveRunState
+): JudgeUrlCaptureHandle {
+  let settled = false;
+  let resolveFn: (url: string | null) => void;
+
+  const promise = new Promise<string | null>((resolve) => {
+    resolveFn = resolve;
+  });
+
+  const finish = (url: string | null): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    browser.tabs.onUpdated.removeListener(listener);
+    state.tabListeners = state.tabListeners.filter((fn) => fn !== removeListener);
+    resolveFn(url);
+  };
+
+  const removeListener = (): void => {
+    browser.tabs.onUpdated.removeListener(listener);
+  };
+
+  const timer = setTimeout(() => {
+    void browser.tabs.get(tabId).then((tab) => {
+      const currentUrl = tab.url ?? "";
+      if (currentUrl && currentUrl !== newChatUrl && !isNewChatUrl(currentUrl, newChatUrl)) {
+        finish(currentUrl);
+      } else {
+        finish(null);
+      }
+    }).catch(() => finish(null));
+  }, timeoutMs);
+
+  const listener = (
+    updatedTabId: number,
+    changeInfo: Browser.tabs.OnUpdatedInfo,
+    updatedTab: Browser.tabs.Tab
+  ) => {
+    if (updatedTabId === tabId && changeInfo.url) {
+      const url = changeInfo.url;
+      if (!isNewChatUrl(url, newChatUrl)) {
+        finish(url);
+      }
+    }
+  };
+
+  state.tabListeners.push(removeListener);
+  browser.tabs.onUpdated.addListener(listener);
+
+  // Race-safety: read current URL at attach time in case it already changed
+  void browser.tabs.get(tabId).then((tab) => {
+    const currentUrl = tab.url ?? "";
+    if (currentUrl && currentUrl !== newChatUrl && !isNewChatUrl(currentUrl, newChatUrl)) {
+      finish(currentUrl);
+    }
+  }).catch(() => {
+    // ignore — listener and timer will handle it
+  });
+
+  const cancel = (): void => {
+    finish(null);
+  };
+
+  return { promise, cancel };
+}
+
+async function openJudgeTabAndListenForReady(
+  appKey: AppKey,
+  targetWindowId: number | null,
+  tabLoadTimeoutMs: number,
+  contentReadyTimeoutMs: number
+): Promise<{ tabId: number; tabUrl: string | null; loaded: boolean; contentReady: boolean }> {
+  const newChatUrl = getSupportedApp(appKey).newChatUrl;
+
+  // Use the window captured at the start of the council run, before agents opened.
+  if (targetWindowId != null) {
+    const { tabId: matchingTabId, matches } = await findMatchingTabInWindow(targetWindowId, appKey);
+    if (matches && matchingTabId != null) {
+      await browser.tabs.update(matchingTabId, { url: newChatUrl });
+      return openTabAndListenForReadyOnExistingTab(matchingTabId, newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey);
+    }
+
+    // No matching tab; create a new tab in the captured window
+    return openTabAndListenForReadyInWindow(targetWindowId, newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey);
+  }
+
+  // Fallback: open in a new window (previous behavior)
+  return openTabAndListenForReady(newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey);
+}
+
+function openTabAndListenForReadyOnExistingTab(
+  tabId: number,
+  newChatUrl: string,
+  tabLoadTimeoutMs: number,
+  contentReadyTimeoutMs: number,
+  appKey: AppKey
+): Promise<{ tabId: number; tabUrl: string | null; loaded: boolean; contentReady: boolean }> {
+  return new Promise<{ tabId: number; tabUrl: string | null; loaded: boolean; contentReady: boolean }>((resolve) => {
+    let settled = false;
+    let tabLoaded = false;
+    let contentReady = false;
+
+    const contentReadyDeadline = Date.now() + tabLoadTimeoutMs + contentReadyTimeoutMs;
+
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(loadTimer);
+      clearTimeout(readyTimer);
+      browser.tabs.onUpdated.removeListener(tabListener);
+      browser.runtime.onMessage.removeListener(messageListener);
+      resolve({
+        tabId,
+        tabUrl: null,
+        loaded: tabLoaded,
+        contentReady
+      });
+    };
+
+    const messageListener = (message: ContentToBgMessage, sender: Browser.runtime.MessageSender) => {
+      if (
+        message.type === "CONTENT_READY" &&
+        message.appKey === appKey &&
+        sender.tab?.id === tabId
+      ) {
+        contentReady = true;
+        if (tabLoaded) {
+          void browser.tabs.get(tabId).then((tab) => {
+            settled = true;
+            clearTimeout(loadTimer);
+            clearTimeout(readyTimer);
+            browser.tabs.onUpdated.removeListener(tabListener);
+            browser.runtime.onMessage.removeListener(messageListener);
+            resolve({
+              tabId,
+              tabUrl: tab.url ?? null,
+              loaded: tabLoaded,
+              contentReady
+            });
+          }).catch(() => finish());
+        }
+      }
+    };
+
+    const tabListener = (
+      updatedTabId: number,
+      changeInfo: Browser.tabs.OnUpdatedInfo,
+      updatedTab: Browser.tabs.Tab
+    ) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        tabLoaded = true;
+        if (contentReady) {
+          settled = true;
+          clearTimeout(loadTimer);
+          clearTimeout(readyTimer);
+          browser.tabs.onUpdated.removeListener(tabListener);
+          browser.runtime.onMessage.removeListener(messageListener);
+          resolve({
+            tabId,
+            tabUrl: updatedTab.url ?? null,
+            loaded: tabLoaded,
+            contentReady
+          });
+        }
+      }
+    };
+
+    const loadTimer = setTimeout(() => {
+      if (!tabLoaded) {
+        finish();
+      }
+    }, tabLoadTimeoutMs);
+
+    const readyTimer = setTimeout(() => {
+      if (!contentReady) {
+        finish();
+      }
+    }, contentReadyDeadline - Date.now());
+
+    browser.runtime.onMessage.addListener(messageListener);
+    browser.tabs.onUpdated.addListener(tabListener);
+
+    // The tab is already being navigated by the caller; handle fast path
+    void browser.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete" && tab.url && tab.url !== newChatUrl && !isNewChatUrl(tab.url, newChatUrl)) {
+        tabLoaded = true;
+        if (contentReady) {
+          settled = true;
+          clearTimeout(loadTimer);
+          clearTimeout(readyTimer);
+          browser.tabs.onUpdated.removeListener(tabListener);
+          browser.runtime.onMessage.removeListener(messageListener);
+          resolve({
+            tabId,
+            tabUrl: tab.url ?? null,
+            loaded: tabLoaded,
+            contentReady
+          });
+        }
+      }
+    }).catch(() => finish());
+  });
+}
+
+function openTabAndListenForReadyInWindow(
+  windowId: number,
+  url: string,
+  tabLoadTimeoutMs: number,
+  contentReadyTimeoutMs: number,
+  appKey: AppKey
+): Promise<{ tabId: number; tabUrl: string | null; loaded: boolean; contentReady: boolean }> {
+  return new Promise<{ tabId: number; tabUrl: string | null; loaded: boolean; contentReady: boolean }>((resolve) => {
+    let settled = false;
+    let tabId: number | null = null;
+    let tabLoaded = false;
+    let contentReady = false;
+
+    const contentReadyDeadline = Date.now() + tabLoadTimeoutMs + contentReadyTimeoutMs;
+
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(loadTimer);
+      clearTimeout(readyTimer);
+      browser.tabs.onUpdated.removeListener(tabListener);
+      browser.runtime.onMessage.removeListener(messageListener);
+      resolve({
+        tabId: tabId ?? -1,
+        tabUrl: null,
+        loaded: tabLoaded,
+        contentReady
+      });
+    };
+
+    const messageListener = (message: ContentToBgMessage, sender: Browser.runtime.MessageSender) => {
+      if (
+        message.type === "CONTENT_READY" &&
+        message.appKey === appKey &&
+        sender.tab?.id === tabId
+      ) {
+        contentReady = true;
+        if (tabLoaded) {
+          if (tabId !== null) {
+            void browser.tabs.get(tabId).then((tab) => {
+              settled = true;
+              clearTimeout(loadTimer);
+              clearTimeout(readyTimer);
+              browser.tabs.onUpdated.removeListener(tabListener);
+              browser.runtime.onMessage.removeListener(messageListener);
+              resolve({
+                tabId: tabId ?? -1,
+                tabUrl: tab.url ?? null,
+                loaded: tabLoaded,
+                contentReady
+              });
+            }).catch(() => finish());
+          } else {
+            finish();
+          }
+        }
+      }
+    };
+
+    const tabListener = (
+      updatedTabId: number,
+      changeInfo: Browser.tabs.OnUpdatedInfo,
+      updatedTab: Browser.tabs.Tab
+    ) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        tabLoaded = true;
+        if (contentReady) {
+          settled = true;
+          clearTimeout(loadTimer);
+          clearTimeout(readyTimer);
+          browser.tabs.onUpdated.removeListener(tabListener);
+          browser.runtime.onMessage.removeListener(messageListener);
+          resolve({
+            tabId: tabId ?? -1,
+            tabUrl: updatedTab.url ?? null,
+            loaded: tabLoaded,
+            contentReady
+          });
+        }
+      }
+    };
+
+    const loadTimer = setTimeout(() => {
+      if (!tabLoaded) {
+        finish();
+      }
+    }, tabLoadTimeoutMs);
+
+    const readyTimer = setTimeout(() => {
+      if (!contentReady) {
+        finish();
+      }
+    }, contentReadyDeadline - Date.now());
+
+    browser.runtime.onMessage.addListener(messageListener);
+    browser.tabs.onUpdated.addListener(tabListener);
+
+    void browser.tabs.create({ url, active: true, windowId }).then((tab) => {
+      tabId = tab.id ?? null;
+
+      if (tab.status === "complete") {
+        tabLoaded = true;
+        if (contentReady) {
+          settled = true;
+          clearTimeout(loadTimer);
+          clearTimeout(readyTimer);
+          browser.tabs.onUpdated.removeListener(tabListener);
+          browser.runtime.onMessage.removeListener(messageListener);
+          resolve({
+            tabId: tabId ?? -1,
+            tabUrl: tab.url ?? null,
+            loaded: tabLoaded,
+            contentReady
+          });
+        }
+      }
+    });
   });
 }
 
