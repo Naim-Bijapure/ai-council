@@ -3,7 +3,6 @@ import { browser } from "wxt/browser";
 import {
   formatAgentStatus,
   formatAppName,
-  formatCharacterCount,
   formatSessionStatus,
   formatTimestamp,
   truncateText
@@ -15,6 +14,7 @@ import {
 } from "../../utils/appRegistry";
 import {
   MAX_USER_PROMPT_LENGTH,
+  type AgentResult,
   type AppKey,
   type BackgroundEvent,
   type CouncilPreferences,
@@ -69,6 +69,7 @@ export default function App() {
   const [probeRunning, setProbeRunning] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [probeError, setProbeError] = useState("");
+  const [expandedAgent, setExpandedAgent] = useState<AppKey | null>(null);
 
   const activeSession = snapshot.state === "active" ? snapshot.session : null;
   const isRunning = activeSession?.status === "running";
@@ -275,9 +276,11 @@ export default function App() {
         <section className="panel-section">
           {activeSession ? (
             <SessionView
+              expandedAgent={expandedAgent}
               onCancel={cancelCouncil}
               onNewQuestion={newQuestion}
               onSwitchToJudge={switchToJudge}
+              onToggleAgent={setExpandedAgent}
               session={activeSession}
             />
           ) : (
@@ -428,13 +431,22 @@ export default function App() {
 }
 
 interface SessionViewProps {
+  expandedAgent: AppKey | null;
   onCancel: () => Promise<void>;
   onNewQuestion: () => Promise<void>;
   onSwitchToJudge: () => Promise<void>;
+  onToggleAgent: (key: AppKey | null) => void;
   session: NonNullable<CouncilSnapshot["session"]>;
 }
 
-function SessionView({ onCancel, onNewQuestion, onSwitchToJudge, session }: SessionViewProps) {
+function SessionView({
+  expandedAgent,
+  onCancel,
+  onNewQuestion,
+  onSwitchToJudge,
+  onToggleAgent,
+  session
+}: SessionViewProps) {
   const isRunning = session.status === "running";
   const judgeStep = session.judgeStep ?? { status: "pending" as JudgeStepStatus, startedAt: null, completedAt: null };
   const isHandoff = session.status === "done" || session.status === "partial" || judgeStep.status === "sent";
@@ -458,20 +470,37 @@ function SessionView({ onCancel, onNewQuestion, onSwitchToJudge, session }: Sess
       ) : null}
 
       <div className="agent-list">
-        {session.agentResults.map((result) => (
-          <article key={result.agentKey} className={`agent-card ${result.status}`}>
-            <div className="agent-card-header">
-              <strong>{formatAppName(result.agentKey)} (Agent)</strong>
-              <span>{formatAgentStatus(result.status, result.errorReason)}</span>
-            </div>
-            {result.status === "done" && result.responseText ? (
-              <p>{truncateText(result.responseText, 150)}</p>
-            ) : null}
-            {result.status === "error" && result.errorReason ? (
-              <p>{formatAgentStatus(result.status, result.errorReason)}</p>
-            ) : null}
-          </article>
-        ))}
+        {session.agentResults.map((result) => {
+          const hasResult = result.status === "done" && result.responseText;
+          const isExpanded = expandedAgent === result.agentKey;
+          return (
+            <article
+              key={result.agentKey}
+              className={`agent-card ${result.status}${hasResult ? " clickable" : ""}`}
+              onClick={hasResult ? () => onToggleAgent(isExpanded ? null : result.agentKey) : undefined}
+              role={hasResult ? "button" : undefined}
+              tabIndex={hasResult ? 0 : undefined}
+              onKeyDown={hasResult ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggleAgent(isExpanded ? null : result.agentKey);
+                }
+              } : undefined}
+            >
+              <div className="agent-card-header">
+                <strong>{formatAppName(result.agentKey)} (Agent)</strong>
+                <span>{formatAgentStatus(result.status, result.errorReason)}</span>
+              </div>
+              {hasResult ? (
+                <p>{truncateText(result.responseText, 150)}</p>
+              ) : null}
+              {result.status === "error" && result.errorReason ? (
+                <p>{formatAgentStatus(result.status, result.errorReason)}</p>
+              ) : null}
+              {hasResult ? <span className="expand-hint">Click to view full response</span> : null}
+            </article>
+          );
+        })}
 
         <article className={`agent-card ${judgeStep.status}`}>
           <div className="agent-card-header">
@@ -480,6 +509,14 @@ function SessionView({ onCancel, onNewQuestion, onSwitchToJudge, session }: Sess
           </div>
         </article>
       </div>
+
+      {expandedAgent ? (
+        <AgentResultPopup
+          agentKey={expandedAgent}
+          result={session.agentResults.find((r) => r.agentKey === expandedAgent)}
+          onClose={() => onToggleAgent(null)}
+        />
+      ) : null}
 
       {isHandoff && judgeStep.status === "sent" ? (
         <div className="handoff">
@@ -586,6 +623,72 @@ function ProbeStepRow({ step }: { step: ProbeStep }) {
       <span className="probe-icon">{PROBE_ICONS[step.status]}</span>
       <span className="probe-field">{step.field}</span>
       <span className="probe-detail">{step.detail}</span>
+    </div>
+  );
+}
+
+interface AgentResultPopupProps {
+  agentKey: AppKey;
+  result: AgentResult | undefined;
+  onClose: () => void;
+}
+
+function AgentResultPopup({ agentKey, result, onClose }: AgentResultPopupProps) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  if (!result) return null;
+
+  const duration = result.completedAt && result.startedAt
+    ? ((result.completedAt - result.startedAt) / 1000).toFixed(1) + "s"
+    : "—";
+
+  async function copyToClipboard(): Promise<void> {
+    if (!result?.responseText) return;
+    try {
+      await navigator.clipboard.writeText(result.responseText);
+    } catch {
+      // ignore — clipboard may be unavailable
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{formatAppName(agentKey)} — Full Response</h2>
+          <button className="modal-close" onClick={onClose} type="button" aria-label="Close">×</button>
+        </div>
+        <div className="modal-meta">
+          <span>Status: {formatAgentStatus(result.status, result.errorReason)}</span>
+          <span>Duration: {duration}</span>
+          <span>Length: {result.responseText.length.toLocaleString()} chars</span>
+        </div>
+        {result.responseText ? (
+          <>
+            <div className="modal-body">
+              <pre>{result.responseText}</pre>
+            </div>
+            <div className="modal-footer">
+              <button className="secondary-action" onClick={() => void copyToClipboard()} type="button">
+                Copy
+              </button>
+              <button className="primary-action" onClick={onClose} type="button">
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="modal-body">
+            <p>No response text available.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
