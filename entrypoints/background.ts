@@ -327,6 +327,9 @@ async function runProbe(appKey: AppKey, mode: ProbeMode): Promise<PanelResponse>
     return {
       ok: false,
       error: tabResult.loaded ? "content_script_timeout" : "tab_load_timeout",
+      errorDetail: tabResult.tabUrl
+        ? `tab opened at ${tabResult.tabUrl} but content script did not respond — reload the extension and reopen the tab`
+        : `tab did not load ${app.newChatUrl}`,
       snapshot: getSnapshot()
     };
   }

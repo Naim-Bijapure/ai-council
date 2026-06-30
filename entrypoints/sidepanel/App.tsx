@@ -243,7 +243,7 @@ export default function App() {
       if (response.ok && response.probe) {
         setProbeResult(response.probe);
       } else if (!response.ok) {
-        setProbeError(response.error);
+        setProbeError(response.errorDetail ?? response.error);
       } else {
         setProbeError("probe result missing from response");
       }

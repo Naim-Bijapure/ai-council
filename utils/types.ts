@@ -138,5 +138,6 @@ export type PanelResponse =
   | {
       ok: false;
       error: string;
+      errorDetail?: string;
       snapshot?: CouncilSnapshot;
     };
