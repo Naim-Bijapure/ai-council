@@ -19,7 +19,7 @@ const PROBE_TEST_PROMPT = "Say hello";
 const PROBE_SEND_BUTTON_TIMEOUT_MS = 5_000;
 const PROBE_RESPONSE_WAIT_MS = 30_000;
 const PROBE_COMPLETION_POLL_MS = 500;
-const PROBE_DOM_STABILIZATION_MS = 2_000;
+const PROBE_DOM_STABILIZATION_MS = 6_000;
 const PROBE_MIN_RESPONSE_LENGTH = 5;
 
 function step(field: ProbeField, status: ProbeStepStatus, detail: string, matchedSelector?: string): ProbeStep {
@@ -146,15 +146,10 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
   if (sendButton && !isDisabled(sendButton)) {
     clickElement(sendButton);
     steps.push(step("send_click", "pass", "send button clicked"));
-    await sleep(500);
 
-    // Check if the click actually submitted — if the input still has text,
-    // the framework ignored the synthetic click. Try Enter key as a backup.
-    const remainingText =
-      inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
-        ? inputElement.value
-        : (inputElement.innerText ?? inputElement.textContent ?? "");
-    if (remainingText.trim()) {
+    // Poll for stop button / response start as confirmation of submission.
+    const submitted = await pollForSubmissionStart(selectors, inputElement);
+    if (!submitted) {
       submitViaEnterKey(inputElement);
       steps.push(step("send_click", "warn", "send button click didn't submit — Enter-key backup sent"));
     }
@@ -180,6 +175,36 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
   }
 
   return { appKey, mode: "live", steps, durationMs: Date.now() - startTime };
+}
+
+async function pollForSubmissionStart(
+  selectors: SelectorGroup,
+  inputElement: HTMLElement,
+  pollMs: number = 2_000,
+  intervalMs: number = 200
+): Promise<boolean> {
+  const deadline = Date.now() + pollMs;
+  while (Date.now() < deadline) {
+    // 1. Stop/completion button visible
+    if (selectors.completion.length > 0) {
+      const stopButton = queryFirstSelector(selectors.completion);
+      if (stopButton) return true;
+    }
+    // 2. Response container has started populating
+    const responseContainer = getResponseContainer(selectors.response);
+    if (hasResponseStarted(responseContainer)) return true;
+    // 3. Send button became disabled or disappeared
+    const sendButton = queryFirstSelector(selectors.send) as HTMLElement | null;
+    if (!sendButton || isDisabled(sendButton)) return true;
+    // 4. Input was cleared
+    const remainingText =
+      inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
+        ? inputElement.value
+        : (inputElement.innerText ?? inputElement.textContent ?? "");
+    if (!remainingText.trim()) return true;
+    await sleep(intervalMs);
+  }
+  return false;
 }
 
 function submitViaEnterKey(inputElement: HTMLElement): void {
@@ -208,63 +233,89 @@ interface ProbeResponseResult {
   durationMs: number;
 }
 
+/**
+ * Wait for the probe response to complete.
+ *
+ * Uses MutationObserver as primary signal (fires in background tabs)
+ * with setInterval backup for text-stabilization detection when no
+ * mutations fire during the quiet period.
+ */
 async function waitForProbeResponseCompletion(selectors: SelectorGroup): Promise<ProbeResponseResult> {
   const startTime = Date.now();
-  const deadline = startTime + PROBE_RESPONSE_WAIT_MS;
-  let stopButtonWasVisible = false;
-  let mutationObserved = false;
-  let lastMutationTime = Date.now();
 
-  const observer = new MutationObserver(() => {
-    mutationObserved = true;
-    lastMutationTime = Date.now();
-  });
+  return new Promise<ProbeResponseResult>((resolve) => {
+    let stopButtonWasVisible = false;
+    let lastText = "";
+    let lastTextChangeTime = Date.now();
+    let textEverObserved = false;
+    let settled = false;
 
-  let observedTarget: Element | null = null;
+    function cleanup() {
+      observer.disconnect();
+      clearTimeout(timeoutHandle);
+      clearInterval(pollHandle);
+    }
 
-  try {
-    while (Date.now() < deadline) {
+    function finish(timedOut: boolean) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ timedOut, durationMs: Date.now() - startTime });
+    }
+
+    function checkCompletion(): boolean {
+      // Signal 1: Stop button (authoritative)
       const stopButton = queryFirstSelector(selectors.completion);
       if (stopButton) {
         stopButtonWasVisible = true;
       } else if (stopButtonWasVisible) {
-        await sleep(PROBE_COMPLETION_POLL_MS);
-        if (!queryFirstSelector(selectors.completion)) {
-          return { timedOut: false, durationMs: Date.now() - startTime };
-        }
+        return true;
       }
 
-      const currentContainer = getResponseContainer(selectors.response);
-
-      if (currentContainer) {
-        if (observedTarget !== currentContainer) {
-          observer.disconnect();
-          observedTarget = currentContainer;
-          observer.observe(currentContainer, {
-            childList: true,
-            subtree: true,
-            characterData: true
-          });
-        }
-
-        if (hasResponseStarted(currentContainer)) {
+      // Signal 2: Text stabilization (only when stop button not visible)
+      if (!stopButton) {
+        const currentContainer = getResponseContainer(selectors.response);
+        if (currentContainer && hasResponseStarted(currentContainer)) {
           const text = (currentContainer.textContent ?? "").trim();
-          if (text.length >= PROBE_MIN_RESPONSE_LENGTH && mutationObserved) {
-            const quietTime = Date.now() - lastMutationTime;
-            if (quietTime >= PROBE_DOM_STABILIZATION_MS) {
-              return { timedOut: false, durationMs: Date.now() - startTime };
+          if (text.length >= PROBE_MIN_RESPONSE_LENGTH) {
+            if (text !== lastText) {
+              lastText = text;
+              lastTextChangeTime = Date.now();
+              textEverObserved = true;
+            } else if (textEverObserved) {
+              const quietTime = Date.now() - lastTextChangeTime;
+              if (quietTime >= PROBE_DOM_STABILIZATION_MS) {
+                return true;
+              }
             }
           }
         }
       }
-
-      await sleep(PROBE_COMPLETION_POLL_MS);
+      return false;
     }
 
-    return { timedOut: true, durationMs: Date.now() - startTime };
-  } finally {
-    observer.disconnect();
-  }
+    // Primary signal: MutationObserver (fires even in background tabs)
+    const observer = new MutationObserver(() => {
+      if (settled) return;
+      if (checkCompletion()) finish(false);
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    // Hard timeout
+    const timeoutHandle = setTimeout(() => finish(true), PROBE_RESPONSE_WAIT_MS);
+
+    // Backup polling loop (throttled in background tabs, but sufficient
+    // for the 6s text-stabilization quiet period)
+    const pollHandle = setInterval(() => {
+      if (settled) return;
+      if (checkCompletion()) finish(false);
+    }, PROBE_COMPLETION_POLL_MS);
+  });
 }
 
 async function extractProbeResponse(selectors: SelectorGroup): Promise<string> {

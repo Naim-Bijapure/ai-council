@@ -1,6 +1,6 @@
 {
   "appKey": "perplexity",
-  "_comment": "Verified 2026-06-30 from www.perplexity.ai DOM inspection. Input is unique-id contenteditable div#ask-input[role='textbox']. Send button is button[aria-label='Submit'] (only enabled when text typed — same pattern as Claude). Response container is div#markdown-content-0 (unique id for latest answer — ID rotates per query, always 0 for active answer). Fallback to div.prose.dark:prose-invert which is the markdown prose class. No stop button — rely on DOM stabilization. Login detection uses a[href*='login'] / a[href*='signin'].",
+  "_comment": "Verified 2026-07-01. Input is contenteditable div#ask-input[role='textbox']. Send button is button[aria-label='Submit'] (only enabled when text typed). Stop button button[aria-label='Stop response (Esc)'] appears during generation (web search + answer) and disappears on completion — primary completion indicator. Response container is div#markdown-content-0 (clean answer text). Fallback to div.prose.dark:prose-invert.",
   "selectors": {
     "input": [
       "div#ask-input[contenteditable='true']",
@@ -17,7 +17,9 @@
       "div.prose.dark\\:prose-invert",
       "div.prose"
     ],
-    "completion": [],
+    "completion": [
+      "button[aria-label='Stop response (Esc)']"
+    ],
     "blocked": [],
     "loginError": [
       "a[href*='login']",

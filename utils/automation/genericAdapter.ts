@@ -17,7 +17,7 @@ import { DEFAULT_AUTOMATION_TIMEOUTS } from "./types";
 import type { AppKey } from "../types";
 
 const STOP_BUTTON_POLL_INTERVAL_MS = 500;
-const DOM_STABILIZATION_QUIET_MS = 2_000;
+const DOM_STABILIZATION_QUIET_MS = 6_000;
 const MIN_RESPONSE_LENGTH = 10;
 const SEND_CONFIRMATION_TIMEOUT_MS = 15_000;
 const SEND_CONFIRMATION_POLL_MS = 300;
@@ -48,6 +48,53 @@ function submitViaEnterKey(inputElement: HTMLElement): void {
 
 function log(appKey: AppKey, stage: string, detail?: unknown): void {
   console.log(`[${appKey} Adapter] ${stage}`, detail ?? "");
+}
+
+/**
+ * Polls for up to `pollMs` to detect whether a submission succeeded.
+ * Signals checked (in priority order):
+ *   1. Stop/completion button appeared (generation started)
+ *   2. Response container has non-empty text
+ *   3. Send button became disabled or disappeared
+ *   4. Input was cleared (text emptied)
+ *
+ * Returns true as soon as any signal is detected, or false if the polling
+ * window expires without any signal.
+ */
+async function didSubmissionStart(
+  selectors: SelectorGroup,
+  inputElement: HTMLElement,
+  pollMs: number = 2_000,
+  intervalMs: number = 200
+): Promise<boolean> {
+  const deadline = Date.now() + pollMs;
+
+  while (Date.now() < deadline) {
+    // 1. Stop/completion button visible
+    if (selectors.completion.length > 0) {
+      const stopButton = queryFirstSelector(selectors.completion);
+      if (stopButton) return true;
+    }
+
+    // 2. Response container has started populating
+    const responseContainer = getResponseContainer(selectors.response);
+    if (hasResponseStarted(responseContainer)) return true;
+
+    // 3. Send button became disabled or disappeared
+    const sendButton = queryFirstSelector(selectors.send) as HTMLElement | null;
+    if (!sendButton || isDisabled(sendButton)) return true;
+
+    // 4. Input was cleared
+    const remainingText =
+      inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
+        ? inputElement.value
+        : (inputElement.innerText ?? inputElement.textContent ?? "");
+    if (!remainingText.trim()) return true;
+
+    await sleep(intervalMs);
+  }
+
+  return false;
 }
 
 export async function runAgent(
@@ -104,15 +151,10 @@ export async function runAgent(
     log(appKey, "Clicking send button...");
     clickElement(sendButton);
     log(appKey, "Send button clicked");
-    await sleep(500);
 
-    // Check if the click actually submitted — if the input still has text,
-    // the framework ignored the synthetic click. Try Enter key as a backup.
-    const remainingText =
-      inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
-        ? inputElement.value
-        : (inputElement.innerText ?? inputElement.textContent ?? "");
-    if (remainingText.trim()) {
+    // Check if the click actually submitted — poll for stop button / response start.
+    const submitted = await didSubmissionStart(selectors, inputElement);
+    if (!submitted) {
       log(appKey, "Send button click didn't submit — trying Enter-key backup...");
       submitViaEnterKey(inputElement);
     }
@@ -132,7 +174,7 @@ export async function runAgent(
   // Step 7: Extract response
   if (responseResult.timedOut) {
     log(appKey, "Timed out — extracting partial response...");
-    const partialText = await extractLatestResponse(selectors);
+    const partialText = await extractLatestResponse(appKey, selectors);
     if (!partialText || partialText.trim().length === 0) {
       return { success: false, errorReason: "timeout", completedAt: Date.now() };
     }
@@ -140,7 +182,7 @@ export async function runAgent(
   }
 
   log(appKey, "Extracting response text...");
-  const responseText = await extractLatestResponse(selectors);
+  const responseText = await extractLatestResponse(appKey, selectors);
   log(appKey, "Response extracted", { length: responseText.length });
 
   if (!responseText || responseText.trim().length === 0) {
@@ -198,15 +240,10 @@ export async function runJudge(
   if (sendButton && !isDisabled(sendButton)) {
     log(appKey, "Clicking send button...");
     clickElement(sendButton);
-    await sleep(500);
+    log(appKey, "Send button clicked");
 
-    // Check if the click actually submitted — if the input still has text,
-    // the framework ignored the synthetic click. Try Enter key as a backup.
-    const remainingText =
-      inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
-        ? inputElement.value
-        : (inputElement.innerText ?? inputElement.textContent ?? "");
-    if (remainingText.trim()) {
+    const submitted = await didSubmissionStart(selectors, inputElement);
+    if (!submitted) {
       log(appKey, "Send button click didn't submit — trying Enter-key backup...");
       submitViaEnterKey(inputElement);
     }
@@ -228,75 +265,116 @@ interface ResponseWaitResult {
   timedOut: boolean;
 }
 
+/**
+ * Wait for the LLM response to complete.
+ *
+ * Uses a MutationObserver as the PRIMARY completion signal because
+ * MutationObserver callbacks fire even in background (throttled) tabs,
+ * unlike setTimeout/setInterval which Chrome throttles to ~1s minimum.
+ *
+ * A backup setInterval polling loop provides a safety net for apps
+ * without a stop button (Gemini, Claude, Qwen, Kimi, Perplexity) where
+ * text stabilization is the only signal — if no DOM mutations occur
+ * during the quiet period, the polling loop detects it instead.
+ */
 async function waitForResponseCompletion(
   appKey: AppKey,
   selectors: SelectorGroup,
   timeoutMs: number
 ): Promise<ResponseWaitResult> {
-  const deadline = Date.now() + timeoutMs;
-  let stopButtonWasVisible = false;
-  let mutationObserved = false;
-  let lastMutationTime = Date.now();
+  return new Promise<ResponseWaitResult>((resolve) => {
+    let stopButtonWasVisible = false;
+    let lastText = "";
+    let lastTextChangeTime = Date.now();
+    let textEverObserved = false;
+    let settled = false;
 
-  const observer = new MutationObserver(() => {
-    mutationObserved = true;
-    lastMutationTime = Date.now();
-  });
+    function cleanup() {
+      observer.disconnect();
+      clearTimeout(timeoutHandle);
+      clearInterval(pollHandle);
+    }
 
-  let observedTarget: Element | null = null;
+    function finish(timedOut: boolean, reason: string) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (timedOut) {
+        log(appKey, "  Response wait timed out", { stopButtonWasVisible });
+      } else {
+        log(appKey, `  Completion detected: ${reason}`, { textLength: lastText.length });
+      }
+      resolve({ timedOut });
+    }
 
-  try {
-    while (Date.now() < deadline) {
-      // Signal 1: stop button was visible then disappeared
+    function checkCompletion(): string | null {
+      // Signal 1: Stop button (authoritative when available)
+      // Checked every iteration — the stop button may appear late (e.g. after
+      // ChatGPT finishes a web search before generating the response).
       const stopButton = queryFirstSelector(selectors.completion);
       if (stopButton) {
         stopButtonWasVisible = true;
       } else if (stopButtonWasVisible) {
-        await sleep(STOP_BUTTON_POLL_INTERVAL_MS);
-        const stopButtonRecheck = queryFirstSelector(selectors.completion);
-        if (!stopButtonRecheck) {
-          log(appKey, "  Completion detected: stop button disappeared");
-          return { timedOut: false };
-        }
+        return "stop button disappeared";
       }
 
-      // Signal 3: DOM stabilization (scoped to response container)
-      const currentContainer = getResponseContainer(selectors.response);
-      if (currentContainer) {
-        if (observedTarget !== currentContainer) {
-          observer.disconnect();
-          observedTarget = currentContainer;
-          observer.observe(currentContainer, {
-            childList: true,
-            subtree: true,
-            characterData: true
-          });
-        }
-
-        if (hasResponseStarted(currentContainer)) {
-          const text = (currentContainer.textContent ?? "").trim();
-          if (text.length >= MIN_RESPONSE_LENGTH && mutationObserved) {
-            const quietTime = Date.now() - lastMutationTime;
-            if (quietTime >= DOM_STABILIZATION_QUIET_MS) {
-              log(appKey, "  Completion detected: DOM stabilized", { textLength: text.length });
-              return { timedOut: false };
+      // Signal 2: Text content stabilization (fallback)
+      // Only when stop button is NOT currently visible.
+      if (!stopButton) {
+        const container = getResponseContainer(selectors.response);
+        if (container && hasResponseStarted(container)) {
+          const text = (container.textContent ?? "").trim();
+          if (text.length >= MIN_RESPONSE_LENGTH) {
+            if (text !== lastText) {
+              lastText = text;
+              lastTextChangeTime = Date.now();
+              textEverObserved = true;
+            } else if (textEverObserved) {
+              const quietTime = Date.now() - lastTextChangeTime;
+              if (quietTime >= DOM_STABILIZATION_QUIET_MS) {
+                return `text stabilized (${quietTime}ms quiet)`;
+              }
             }
           }
         }
       }
-
-      await sleep(STOP_BUTTON_POLL_INTERVAL_MS);
+      return null;
     }
 
-    log(appKey, "  Response wait timed out");
-    return { timedOut: true };
-  } finally {
-    observer.disconnect();
-  }
+    // Primary signal: MutationObserver (fires even in background tabs)
+    const observer = new MutationObserver(() => {
+      if (settled) return;
+      const reason = checkCompletion();
+      if (reason) finish(false, reason);
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    // Hard timeout safety net (may be delayed in background tabs — that's OK)
+    const timeoutHandle = setTimeout(() => finish(true, "timeout"), timeoutMs);
+
+    // Backup polling loop (throttled to ~1s in background tabs by Chrome,
+    // but that's sufficient for the 6s text-stabilization quiet period).
+    // Essential for apps without a stop button where no mutations fire
+    // during the streaming quiet period.
+    const pollHandle = setInterval(() => {
+      if (settled) return;
+      const reason = checkCompletion();
+      if (reason) finish(false, reason);
+    }, STOP_BUTTON_POLL_INTERVAL_MS);
+  });
 }
 
-async function extractLatestResponse(selectors: SelectorGroup): Promise<string> {
+async function extractLatestResponse(appKey: AppKey, selectors: SelectorGroup): Promise<string> {
   const containers = document.querySelectorAll(selectors.response.join(", "));
+  log(appKey, `extract: Found ${containers.length} response container(s)`, {
+    selectors: selectors.response.join(", ")
+  });
+
   if (containers.length === 0) return "";
 
   const lastContainer = containers[containers.length - 1];
@@ -306,7 +384,12 @@ async function extractLatestResponse(selectors: SelectorGroup): Promise<string> 
 
   const refreshed = document.querySelectorAll(selectors.response.join(", "));
   const target = refreshed[refreshed.length - 1] ?? lastContainer;
-  return extractTextFromElement(target);
+  const extracted = extractTextFromElement(target);
+  log(appKey, `extract: Extracted ${extracted.length} chars`, {
+    htmlLength: target.innerHTML.length,
+    textPreview: extracted.slice(0, 200)
+  });
+  return extracted;
 }
 
 async function confirmMessageSent(

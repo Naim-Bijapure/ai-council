@@ -45,13 +45,13 @@ export interface AutomationTimeouts {
 }
 
 export const DEFAULT_AUTOMATION_TIMEOUTS: AutomationTimeouts = {
-  tabLoadMs: 15_000,
-  contentReadyMs: 10_000,
+  tabLoadMs: 30_000,
+  contentReadyMs: 20_000,
   loginGraceMs: 10_000,
   loginPollIntervalMs: 500,
   sendButtonEnableMs: 5_000,
   sendButtonPollIntervalMs: 100,
-  responseWaitMs: 45_000,
+  responseWaitMs: 180_000,
   urlCaptureMs: 30_000
 };
 

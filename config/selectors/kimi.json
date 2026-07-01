@@ -1,6 +1,6 @@
 {
   "appKey": "kimi",
-  "_comment": "Verified 2026-06-30 from www.kimi.com DOM inspection. Input is contenteditable div.chat-input-editor[role='textbox']. No send button visible in DOM (no aria-label, no class) — relies on Enter-key submission. Response container div.chat-content-item.chat-content-item-assistant appears after message sent. Clean answer text in div.markdown-container. No stop button found — rely on DOM stabilization.",
+  "_comment": "Verified 2026-07-01. Input is contenteditable div.chat-input-editor[role='textbox']. No send button visible in DOM (no aria-label, no class) — relies on Enter-key submission. Stop indicator div.send-button-container.stop appears during generation (thinking/tool calls) and disappears on completion — primary completion indicator. Response container div.chat-content-item.chat-content-item-assistant appears after message sent. Clean answer text in div.markdown-container (excludes thinking/tool-call text in div.toolcall-content).",
   "selectors": {
     "input": [
       "div.chat-input-editor[role='textbox'][contenteditable='true']",
@@ -13,11 +13,13 @@
       "div.send-button"
     ],
     "response": [
+      "div.markdown-container",
       "div.chat-content-item.chat-content-item-assistant",
-      "div.segment.segment-assistant",
-      "div.markdown-container"
+      "div.segment.segment-assistant"
     ],
-    "completion": [],
+    "completion": [
+      "div.send-button-container.stop"
+    ],
     "blocked": [],
     "loginError": [
       "a[href*='login']",

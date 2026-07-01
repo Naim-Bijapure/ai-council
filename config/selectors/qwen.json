@@ -1,6 +1,6 @@
 {
     "appKey": "qwen",
-    "_comment": "Verified 2026-06-30. Uses Ant Design (antd). Input is textarea.message-input-textarea. Send button is button.send-button (renders only after text is typed). During streaming, the send button gets disabled (HTML disabled attr + class) — used as completion indicator. Response bubble is div.chat-response-message.",
+    "_comment": "Verified 2026-07-01. Uses Ant Design (antd). Input is textarea.message-input-textarea. Send button is button.send-button (renders only after text is typed). Stop button button.stop-button appears during generation (thinking + web search) and disappears on completion — primary completion indicator. Response text is in div.response-message-content.phase-answer (appears only in answer phase, excludes thinking/searching text). div.chat-response-message is fallback (includes 'Thinking completed' prefix). During streaming, send button gets disabled.",
     "selectors": {
         "input": [
             "textarea.message-input-textarea",
@@ -12,11 +12,14 @@
             "div.message-input-right-button-send button"
         ],
         "response": [
+            "div.response-message-content.phase-answer",
+            "div.response-message-content",
             "div.chat-response-message",
-            "div[id^=\"chat-response-message-\"]",
-            "div.response-message-content"
+            "div[id^=\"chat-response-message-\"]"
         ],
-        "completion": [],
+        "completion": [
+            "button.stop-button"
+        ],
         "blocked": [],
         "loginError": [
             "a[href*='login']",

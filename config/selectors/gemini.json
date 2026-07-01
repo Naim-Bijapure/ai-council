@@ -1,6 +1,6 @@
 {
   "appKey": "gemini",
-  "_comment": "Verified 2026-06-30 from gemini.google.com DOM inspection. Input is Quill editor (ql-editor) with aria-label='Enter a prompt for Gemini'. Send button is button[aria-label='Send message'] — only visible while text is typed. Response container div.response-container only appears after a message is sent (not in zero-state). Clean answer text is in div.markdown.markdown-main-panel. No stop button found in DOM — rely on DOM stabilization.",
+  "_comment": "Verified 2026-07-01. Input is Quill editor (ql-editor) with aria-label='Enter a prompt for Gemini'. Send button is button[aria-label='Send message'] — only visible while text is typed. Stop button button[aria-label='Stop response'] appears during generation (thinking + web search) and disappears on completion — primary completion indicator. Clean answer text is in div.markdown.markdown-main-panel (excludes 'Gemini said' prefix and 'Searching the web' thinking text). div.response-container is fallback.",
   "selectors": {
     "input": [
       "div[aria-label='Enter a prompt for Gemini']",
@@ -11,11 +11,13 @@
       "button[aria-label='Send message']"
     ],
     "response": [
-      "div.response-container",
       "div.markdown.markdown-main-panel",
+      "div.response-container",
       "div.presented-response-container"
     ],
-    "completion": [],
+    "completion": [
+      "button[aria-label='Stop response']"
+    ],
     "blocked": [],
     "loginError": [
       "form[action*='ServiceLogin']",

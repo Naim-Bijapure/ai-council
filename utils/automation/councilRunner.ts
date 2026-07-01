@@ -176,11 +176,20 @@ export async function runCouncil(
 
     if (checkCancelled()) return;
 
-    // Step 3: Sequentially activate each agent tab, inject prompt, and send.
-    // This gives each tab a brief moment of focus so execCommand/click work
-    // reliably (Chrome throttles background tabs). Response detection continues
-    // in the background via MutationObserver.
-    const agentResultPromises: Promise<void>[] = [];
+    // Step 3: Run each agent SEQUENTIALLY (one at a time).
+    //
+    // Why sequential? Chrome heavily throttles background tabs — setTimeout
+    // is clamped to ~1s, the event loop is slowed, and even MutationObserver
+    // callbacks are delayed. This causes response completion detection to
+    // miss the stop-button window and extract only a partial response.
+    //
+    // By running one agent at a time, each agent tab stays foreground for
+    // its entire generation. Chrome gives it full CPU, so the stop button
+    // is detected reliably and the full response is captured.
+    //
+    // Tradeoff: total wall-clock time is the SUM of all agent durations
+    // instead of the MAX. For 2 agents at ~20s each, total = ~40s instead
+    // of ~20s. This is acceptable for reliability.
 
     for (const ready of agentReadiness) {
       if (!ready) continue;
@@ -188,7 +197,7 @@ export async function runCouncil(
 
       const { key, tabId } = ready;
 
-      // Activate the agent tab so injection works without throttling
+      // Activate the agent tab so it gets full CPU (no background throttling)
       try {
         await browser.tabs.update(tabId, { active: true });
       } catch {
@@ -200,44 +209,28 @@ export async function runCouncil(
 
       updateAgent(key, { status: "injecting", startedAt: Date.now() });
 
-      // Start the agent run (sends message + waits for result).
-      // We don't await here — we want to move to the next agent.
-      const resultPromise = sendAgentRun(key, tabId, session.prompt, timeouts, state).then((adapterResult) => {
-        if (checkCancelled()) return;
+      // Send the prompt and WAIT for the full response (sequential, not parallel).
+      // The tab is foreground, so completion detection runs at full speed.
+      const adapterResult = await sendAgentRun(key, tabId, session.prompt, timeouts, state);
 
-        if (!adapterResult.success) {
-          updateAgent(key, {
-            status: "error",
-            errorReason: adapterResult.errorReason ?? "dom_error",
-            completedAt: Date.now()
-          });
-          return;
-        }
+      if (checkCancelled()) break;
 
+      if (!adapterResult.success) {
         updateAgent(key, {
-          status: "done",
-          responseText: adapterResult.responseText ?? "",
-          completedAt: adapterResult.completedAt ?? Date.now()
+          status: "error",
+          errorReason: adapterResult.errorReason ?? "dom_error",
+          completedAt: Date.now()
         });
-      });
-
-      agentResultPromises.push(resultPromise);
-
-      // Wait for injection + send to complete before moving to next agent
-      await sleep(2000);
-    }
-
-    // Step 4: Switch back to the user's tab
-    if (userTabId != null) {
-      try {
-        await browser.tabs.update(userTabId, { active: true });
-      } catch {
-        // ignore
+        continue;
       }
+
+      updateAgent(key, {
+        status: "done",
+        responseText: adapterResult.responseText ?? "",
+        completedAt: adapterResult.completedAt ?? Date.now()
+      });
     }
 
-    // Step 5: Wait for all agent results (response detection runs in background)
-    await Promise.all(agentResultPromises);
     if (checkCancelled()) return;
 
     // Step 4: Check if any agent succeeded

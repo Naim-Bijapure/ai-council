@@ -165,6 +165,40 @@ export async function waitForSendButtonEnabled(
   return null;
 }
 
+/**
+ * Wait for the send button to transition from enabled → disabled → enabled.
+ * During generation, most LLMs disable the send button. When generation
+ * completes, it re-enables. This is a reliable completion signal for apps
+ * that don't expose a visible stop button.
+ *
+ * Returns true if the disabled→enabled transition was observed, false if
+ * the button never disabled (generation may have been instant) or timed out.
+ */
+export async function waitForSendButtonReenabled(
+  sendSelectors: string[],
+  timeoutMs: number,
+  pollIntervalMs = 500
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let wasDisabled = false;
+
+  while (Date.now() < deadline) {
+    const button = queryFirstSelector(sendSelectors) as HTMLElement | null;
+    if (button) {
+      const disabled = isDisabled(button);
+      if (disabled) {
+        wasDisabled = true;
+      } else if (wasDisabled) {
+        // Transition: disabled → enabled → generation complete
+        return true;
+      }
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  return false;
+}
+
 export function isDisabled(element: HTMLElement): boolean {
   if (
     element.hasAttribute("disabled") ||
@@ -220,9 +254,8 @@ export function clickElement(element: HTMLElement): void {
   }
   element.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
 
-  // Native click + synthetic MouseEvent
+  // Native click — dispatches a single trusted click event
   element.click();
-  element.dispatchEvent(new MouseEvent("click", mouseOpts));
 }
 
 export async function waitForElement(
@@ -253,10 +286,19 @@ export function extractTextFromElement(element: Element): string {
   const clone = element.cloneNode(true) as Element;
   clone
     .querySelectorAll(
-      "button, [data-testid], .copy-button, [aria-label='Copy'], [role='menu'], script, style, svg"
+      "button, [aria-label='Copy'], [aria-label='Stop generating'], [role='menu'], script, style, svg, .copy-button"
     )
     .forEach((el) => el.remove());
-  return (clone.textContent ?? "").replace(/\s+\n/g, "\n").trim();
+
+  const blockSelector = "p, h1, h2, h3, h4, h5, h6, li, tr, div, br, hr";
+  clone.querySelectorAll(blockSelector).forEach((el) => {
+    el.appendChild(document.createTextNode("\n"));
+  });
+
+  return (clone.textContent ?? "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function scrollResponseToBottom(container: Element): void {
