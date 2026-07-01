@@ -16,7 +16,9 @@
       "div.presented-response-container"
     ],
     "completion": [
-      "button[aria-label='Stop response']"
+      "button[aria-label='Stop response']",
+      "button[aria-label='Stop generating']",
+      "button[aria-label*='Stop']"
     ],
     "blocked": [],
     "loginError": [

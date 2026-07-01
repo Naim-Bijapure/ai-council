@@ -17,8 +17,67 @@ export function isContentEditable(element: HTMLElement): boolean {
   return element.tagName.toLowerCase() === "div" || element.isContentEditable;
 }
 
-export function setInputText(element: HTMLElement, text: string): void {
+/**
+ * Clear a contenteditable element's content in a way that also clears the
+ * internal model of rich editors (Lexical, ProseMirror, Quill). Selecting all
+ * content and deleting via execCommand routes through the editor's own
+ * beforeinput handler; a plain `textContent = ""` is added as a DOM-level
+ * backstop. Without this, editors that ignore direct DOM mutation retain their
+ * previous value and the next insert appends to it, duplicating the text.
+ */
+function clearContentEditable(element: HTMLElement): void {
+  try {
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  } catch {
+    // ignore — selection API may be unavailable
+  }
+
+  if (typeof document.execCommand === "function") {
+    // Delete the selected content through the editor's own handler. This keeps
+    // the editor's internal structure (e.g. Lexical's placeholder <p>) intact,
+    // so a following insertText has a valid caret position.
+    document.execCommand("delete", false);
+  } else if ((element.textContent ?? "") !== "") {
+    // No execCommand available (rare): fall back to a direct clear. This can
+    // desync rich-editor models, but it's the only option in that environment.
+    element.textContent = "";
+  }
+}
+
+/**
+ * Insert text by simulating a paste. This is the most reliable programmatic
+ * insertion path for Lexical (Perplexity) and other editors that ignore
+ * execCommand("insertText") but implement a robust paste handler. The editor
+ * reads the text from clipboardData and inserts it exactly once through its
+ * normal pipeline (keeping its model in sync).
+ */
+function insertViaPaste(element: HTMLElement, text: string): void {
+  try {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data
+    });
+    element.dispatchEvent(pasteEvent);
+  } catch {
+    // ClipboardEvent / DataTransfer may be unavailable in some contexts.
+  }
+}
+
+export async function setInputText(element: HTMLElement, text: string): Promise<void> {
   if (isContentEditable(element)) {
+    const normalize = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, "");
+    const current = () => normalize(element.textContent ?? "");
+    const expected = normalize(text);
+
     // Try to focus (works in foreground; no-op in background but doesn't throw)
     try {
       element.focus();
@@ -26,41 +85,61 @@ export function setInputText(element: HTMLElement, text: string): void {
       // ignore
     }
 
-    // Clear existing content
-    element.textContent = "";
+    // Clear ANY existing content BEFORE inserting, through the editor's own
+    // delete handler so rich-editor models (Lexical/ProseMirror/Quill) are
+    // cleared too (a plain `textContent = ""` desyncs them).
+    clearContentEditable(element);
 
-    // Method 1: execCommand insertText (best for ProseMirror, needs focus)
-    if (typeof document.execCommand === "function") {
-      const selection = window.getSelection();
-      if (selection) {
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        selection.removeAllRanges();
-        selection.addRange(range);
+    // Fire insertion methods ONE AT A TIME, awaiting after each so that editors
+    // which process input asynchronously (Lexical — Perplexity) have time to
+    // update the DOM before we decide whether to try the next method. Stop at
+    // the first method that lands the text.
+    //
+    // This ordering matters: firing several methods synchronously queues
+    // multiple async insertions that Lexical all applies a moment later,
+    // duplicating the prompt ("Say helloSay hello...").
+    const tryMethod = async (fn: () => void): Promise<boolean> => {
+      if (current().length > 0) return true;
+      fn();
+      // Poll briefly for async editors to render the insertion.
+      for (let i = 0; i < 6; i++) {
+        await sleep(40);
+        if (current().length > 0) break;
       }
-      document.execCommand("insertText", false, text);
+      return current().length > 0;
+    };
+
+    // Method 1: execCommand insertText — reliable for ProseMirror/Quill and
+    // works (asynchronously) for Lexical.
+    let inserted = await tryMethod(() => {
+      if (typeof document.execCommand === "function") {
+        document.execCommand("insertText", false, text);
+      }
+    });
+
+    // Method 2: simulated paste — Lexical's canonical single-insert path.
+    if (!inserted) {
+      inserted = await tryMethod(() => insertViaPaste(element, text));
     }
 
-    // If execCommand didn't work (e.g. background tab), use beforeinput + direct set
-    if ((element.textContent ?? "").trim() !== text.trim()) {
-      element.textContent = "";
-
-      // Dispatch beforeinput — ProseMirror and similar editors listen for this
-      element.dispatchEvent(
-        new InputEvent("beforeinput", {
-          bubbles: true,
-          cancelable: true,
-          data: text,
-          inputType: "insertText"
-        })
+    // Method 3: synthetic beforeinput.
+    if (!inserted) {
+      inserted = await tryMethod(() =>
+        element.dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            data: text,
+            inputType: "insertText"
+          })
+        )
       );
+    }
 
-      // Set text content directly
-      if ((element.textContent ?? "").trim() !== text.trim()) {
-        element.textContent = text;
-      }
-
-      // Dispatch input event so frameworks pick up the change
+    // Method 4 (last resort): set textContent directly and notify with an
+    // insertText input event so frameworks pick up the value.
+    if (!inserted) {
+      element.textContent = text;
       element.dispatchEvent(
         new InputEvent("input", {
           bubbles: true,
@@ -68,8 +147,18 @@ export function setInputText(element: HTMLElement, text: string): void {
           inputType: "insertText"
         })
       );
-      element.dispatchEvent(new Event("change", { bubbles: true }));
     }
+
+    // Safety net: if the editor duplicated the text anyway, clear and fall back
+    // to a single direct set (better a possibly-desynced single copy than a
+    // duplicated prompt).
+    if (inserted && current() !== expected && current().length > expected.length) {
+      clearContentEditable(element);
+      element.textContent = text;
+    }
+
+    // A plain change event is safe for all editors (no insertText semantics).
+    element.dispatchEvent(new Event("change", { bubbles: true }));
   } else if (element instanceof HTMLTextAreaElement) {
     // Focus first — React/Antd may ignore input events on unfocused elements
     try {

@@ -115,7 +115,7 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
   }
 
   try {
-    setInputText(inputElement, PROBE_TEST_PROMPT);
+    await setInputText(inputElement, PROBE_TEST_PROMPT);
   } catch (error) {
     steps.push(step("injection", "fail", `injection threw: ${error instanceof Error ? error.message : "unknown"}`));
     return { appKey, mode: "live", steps, durationMs: Date.now() - startTime };
@@ -139,7 +139,19 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
     steps.push(step("injection", "fail", "text not injected (empty after 5 retries)"));
     return { appKey, mode: "live", steps, durationMs: Date.now() - startTime };
   }
-  steps.push(step("injection", "pass", `text injected (${injectedText.trim().length} chars)`));
+  const injectedChars = injectedText.trim().length;
+  const expectedChars = PROBE_TEST_PROMPT.length;
+  if (injectedChars > expectedChars) {
+    steps.push(
+      step(
+        "injection",
+        "fail",
+        `duplicated: injected ${injectedChars} chars but expected ${expectedChars} ("${injectedText.trim().slice(0, 60)}")`
+      )
+    );
+  } else {
+    steps.push(step("injection", "pass", `text injected (${injectedChars} chars)`));
+  }
 
   const sendButton = await waitForSendButtonEnabled(selectors.send, PROBE_SEND_BUTTON_TIMEOUT_MS);
 
@@ -180,7 +192,7 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
 async function pollForSubmissionStart(
   selectors: SelectorGroup,
   inputElement: HTMLElement,
-  pollMs: number = 2_000,
+  pollMs: number = 5_000,
   intervalMs: number = 200
 ): Promise<boolean> {
   const deadline = Date.now() + pollMs;

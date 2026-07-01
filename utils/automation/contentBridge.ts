@@ -11,7 +11,23 @@ export interface ContentScriptHandlers {
   onCancel: () => void;
 }
 
+// Marker key on the page's isolated-world global. If the content script is
+// injected more than once into the same frame (duplicate manifest + scripting
+// registration, SPA re-injection, etc.), every injection shares this global,
+// so we install exactly one message listener. Without this guard, duplicate
+// listeners each handle the same AGENT_RUN/JUDGE_RUN/PROBE_RUN and call
+// setInputText multiple times, duplicating the prompt in the input box.
+const BRIDGE_INSTALLED_KEY = "__aiCouncilBridgeInstalled__";
+
 export function createContentScriptBridge(appKey: AppKey, handlers: ContentScriptHandlers): void {
+  const globalScope = globalThis as unknown as Record<string, string | undefined>;
+  if (globalScope[BRIDGE_INSTALLED_KEY]) {
+    // Bridge already installed in this frame — avoid registering a second
+    // message listener that would handle each request twice.
+    return;
+  }
+  globalScope[BRIDGE_INSTALLED_KEY] = appKey;
+
   let cancelled = false;
 
   sendContentReadyWithRetry();

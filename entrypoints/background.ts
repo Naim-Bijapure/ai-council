@@ -22,50 +22,41 @@ import {
   type StoredCouncilSession
 } from "../utils/types";
 
-const ALL_APP_KEYS: AppKey[] = ["chatgpt", "claude", "gemini", "deepseek", "qwen", "kimi"];
-
 let activeSession: ActiveCouncilSession | null = null;
 let cancelFlag = false;
 
 export default defineBackground(() => {
   void configureSidePanel();
 
-  if (import.meta.env.DEV) {
-    void ensureContentScriptsRegistered();
-  }
+  // Content scripts are declared in the manifest, so they inject automatically.
+  // Remove any programmatically-registered content scripts left over from
+  // earlier `wxt dev` runs or a previous version of this extension: those
+  // registrations PERSIST across extension reloads and would inject a second
+  // (stale) copy of the content script into each page, causing the bridge and
+  // prompt injection to run twice — duplicating the injected prompt.
+  void cleanupStaleContentScripts();
 
   browser.runtime.onMessage.addListener((message) => {
     return handlePanelMessage(message as PanelRequest);
   });
 });
 
-async function ensureContentScriptsRegistered(): Promise<void> {
+async function cleanupStaleContentScripts(): Promise<void> {
   try {
-    if (!browser.scripting) return;
+    if (!browser.scripting?.getRegisteredContentScripts) return;
 
     const registered = await browser.scripting.getRegisteredContentScripts();
+    if (registered.length === 0) return;
 
-    const toRegister: { id: string; matches: string[]; runAt: "document_idle"; js: string[] }[] = [];
-
-    for (const key of ALL_APP_KEYS) {
-      const app = getSupportedApp(key);
-      const scriptId = `wxt:content-scripts/${key}.js`;
-      if (!registered.some((s) => s.id === scriptId)) {
-        toRegister.push({
-          id: scriptId,
-          matches: app.matchPatterns,
-          runAt: "document_idle" as const,
-          js: [`content-scripts/${key}.js`]
-        });
-      }
-    }
-
-    if (toRegister.length > 0) {
-      await browser.scripting.registerContentScripts(toRegister);
-      console.log("[AI Council] Registered content scripts:", toRegister.map((s) => s.id));
-    }
+    await browser.scripting.unregisterContentScripts({
+      ids: registered.map((s) => s.id)
+    });
+    console.log(
+      "[AI Council] Removed stale programmatically-registered content scripts:",
+      registered.map((s) => s.id)
+    );
   } catch (error) {
-    // Silently fail — in production, content scripts are in the manifest
+    // Silently ignore — manifest-declared content scripts are unaffected.
   }
 }
 

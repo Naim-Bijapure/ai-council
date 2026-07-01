@@ -21,6 +21,10 @@ const DOM_STABILIZATION_QUIET_MS = 6_000;
 const MIN_RESPONSE_LENGTH = 10;
 const SEND_CONFIRMATION_TIMEOUT_MS = 15_000;
 const SEND_CONFIRMATION_POLL_MS = 300;
+// Grace period before falling back to text stabilization when no stop button has been seen.
+// Prevents "Searching the web" / "Thinking..." transient text from triggering premature completion
+// on apps whose stop button appears slightly after generation begins (e.g. Gemini web-search mode).
+const STOP_BUTTON_GRACE_MS = 6_000;
 
 function submitViaEnterKey(inputElement: HTMLElement): void {
   // Focus the element to ensure key events are received
@@ -64,7 +68,7 @@ function log(appKey: AppKey, stage: string, detail?: unknown): void {
 async function didSubmissionStart(
   selectors: SelectorGroup,
   inputElement: HTMLElement,
-  pollMs: number = 2_000,
+  pollMs: number = 5_000,
   intervalMs: number = 200
 ): Promise<boolean> {
   const deadline = Date.now() + pollMs;
@@ -97,7 +101,31 @@ async function didSubmissionStart(
   return false;
 }
 
+// Guards against a second run being started while one is already in flight for
+// this content-script context. Duplicate AGENT_RUN/JUDGE_RUN messages (e.g. a
+// re-injected content script registering a second listener, or a resend) would
+// otherwise call setInputText concurrently and stack injections, duplicating
+// the prompt in the input box.
+let runInFlight = false;
+
 export async function runAgent(
+  appKey: AppKey,
+  prompt: string,
+  selectors: SelectorGroup
+): Promise<AdapterResult> {
+  if (runInFlight) {
+    log(appKey, "Ignoring duplicate agent run — one already in flight");
+    return { success: false, errorReason: "cancelled", completedAt: Date.now() };
+  }
+  runInFlight = true;
+  try {
+    return await runAgentInner(appKey, prompt, selectors);
+  } finally {
+    runInFlight = false;
+  }
+}
+
+async function runAgentInner(
   appKey: AppKey,
   prompt: string,
   selectors: SelectorGroup
@@ -122,7 +150,7 @@ export async function runAgent(
   // Step 3: Inject text
   log(appKey, "Injecting prompt text...");
   try {
-    setInputText(inputElement, prompt);
+    await setInputText(inputElement, prompt);
   } catch (error) {
     log(appKey, "FAILED: injection threw error", error instanceof Error ? error.message : error);
     return { success: false, errorReason: "dom_error", completedAt: Date.now() };
@@ -199,6 +227,23 @@ export async function runJudge(
   prompt: string,
   selectors: SelectorGroup
 ): Promise<SendConfirmationResult> {
+  if (runInFlight) {
+    log(appKey, "Ignoring duplicate judge run — one already in flight");
+    return { sent: false, errorReason: "cancelled" };
+  }
+  runInFlight = true;
+  try {
+    return await runJudgeInner(appKey, prompt, selectors);
+  } finally {
+    runInFlight = false;
+  }
+}
+
+async function runJudgeInner(
+  appKey: AppKey,
+  prompt: string,
+  selectors: SelectorGroup
+): Promise<SendConfirmationResult> {
   log(appKey, "Starting judge run", { promptLength: prompt.length });
 
   // Step 1: Wait for input
@@ -218,7 +263,7 @@ export async function runJudge(
   // Step 3: Inject text
   log(appKey, "Injecting judge prompt...");
   try {
-    setInputText(inputElement, prompt);
+    await setInputText(inputElement, prompt);
   } catch (error) {
     log(appKey, "FAILED: injection threw error", error instanceof Error ? error.message : error);
     return { sent: false, errorReason: "dom_error" };
@@ -285,7 +330,8 @@ async function waitForResponseCompletion(
   return new Promise<ResponseWaitResult>((resolve) => {
     let stopButtonWasVisible = false;
     let lastText = "";
-    let lastTextChangeTime = Date.now();
+    const monitorStartTime = Date.now();
+    let lastTextChangeTime = monitorStartTime;
     let textEverObserved = false;
     let settled = false;
 
@@ -319,8 +365,12 @@ async function waitForResponseCompletion(
       }
 
       // Signal 2: Text content stabilization (fallback)
-      // Only when stop button is NOT currently visible.
-      if (!stopButton) {
+      // Only when stop button is NOT currently visible AND the grace period has elapsed.
+      // The grace period prevents transient loading text ("Searching the web", "Thinking…")
+      // from triggering completion before the stop button has had time to appear.
+      const elapsedMs = Date.now() - monitorStartTime;
+      const graceElapsed = stopButtonWasVisible || elapsedMs >= STOP_BUTTON_GRACE_MS;
+      if (!stopButton && graceElapsed) {
         const container = getResponseContainer(selectors.response);
         if (container && hasResponseStarted(container)) {
           const text = (container.textContent ?? "").trim();
