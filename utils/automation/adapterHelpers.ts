@@ -136,25 +136,36 @@ export async function setInputText(element: HTMLElement, text: string): Promise<
       );
     }
 
-    // Method 4 (last resort): set textContent directly and notify with an
-    // insertText input event so frameworks pick up the value.
+    // Method 4 (last resort): set textContent directly.
     if (!inserted) {
       element.textContent = text;
-      element.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          data: text,
-          inputType: "insertText"
-        })
-      );
     }
 
-    // Safety net: if the editor duplicated the text anyway, clear and fall back
-    // to a single direct set (better a possibly-desynced single copy than a
-    // duplicated prompt).
-    if (inserted && current() !== expected && current().length > expected.length) {
+    // Notify frameworks that the value changed. Editors like Lexical
+    // (Perplexity) call preventDefault() on the beforeinput they handle for
+    // execCommand("insertText"), which SUPPRESSES the browser's native `input`
+    // event — so the host app never learns text was entered and leaves its
+    // Submit button disabled / Enter-to-submit gated ("never submits"). We
+    // dispatch an `input` event ourselves to trigger that detection.
+    //
+    // Crucially this event carries NO `data`: Lexical inserts text on
+    // `beforeinput`, not `input`, so a data-less `input` is treated as a
+    // change notification and will NOT re-insert (which would duplicate).
+    element.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText"
+      })
+    );
+
+    // Give an async editor a moment to react, then guard against duplication:
+    // if the editor somehow ended up with more than the intended text, reset to
+    // a single clean copy.
+    await sleep(50);
+    if (current() !== expected && current().length > expected.length) {
       clearContentEditable(element);
       element.textContent = text;
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     }
 
     // A plain change event is safe for all editors (no insertText semantics).
