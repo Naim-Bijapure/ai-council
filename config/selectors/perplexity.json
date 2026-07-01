@@ -1,6 +1,6 @@
 {
   "appKey": "perplexity",
-  "_comment": "Verified 2026-07-01. Input is contenteditable div#ask-input[role='textbox']. Send button is button[aria-label='Submit'] (only enabled when text typed). Stop button button[aria-label='Stop response (Esc)'] appears during generation (web search + answer) and disappears on completion — primary completion indicator. Response container is div#markdown-content-0 (clean answer text). Fallback to div.prose.dark:prose-invert.",
+  "_comment": "Verified 2026-07-01 against live DOM. Input is contenteditable div#ask-input[role='textbox'] (Lexical editor — inject with execCommand insertText, one method at a time). Send button button[aria-label='Submit'] only RENDERS once text is present; it is enabled while composing and becomes disabled (disabled=true) after submit. On an empty input it is absent, so the static probe's send check will report 'none matched' — expected, not a failure. Automated runs typically submit via the Enter-key fallback. Stop button button[aria-label='Stop response (Esc)'] appears during generation (web search + answer) and disappears on completion — primary completion indicator. Answer text is div#markdown-content-0. NOTE: a bare div.prose matches every news/source card on the page, so it is intentionally NOT used as a fallback.",
   "selectors": {
     "input": [
       "div#ask-input[contenteditable='true']",
@@ -14,8 +14,7 @@
     ],
     "response": [
       "div#markdown-content-0",
-      "div.prose.dark\\:prose-invert",
-      "div.prose"
+      "div.prose.dark\\:prose-invert"
     ],
     "completion": [
       "button[aria-label='Stop response (Esc)']"
