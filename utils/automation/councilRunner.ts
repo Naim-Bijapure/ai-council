@@ -27,6 +27,10 @@ import {
 // stealing focus, at the risk of those SPAs failing with "could not find input".
 const AGENT_POPUP_FOCUSED = true;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface CouncilRunnerCallbacks {
   onUpdate: (session: ActiveCouncilSession) => void;
   onComplete: (session: ActiveCouncilSession) => void;
@@ -152,6 +156,20 @@ export async function runCouncil(
       state.agentTabIds.set(key, popup.tabId);
       if (!session.agentTabUrl && popup.tabUrl) {
         session = update({ agentTabUrl: popup.tabUrl });
+      }
+
+      // Force the popup to the foreground and give it a moment to settle before
+      // injecting. Some apps (Claude) end up in the background after load; while
+      // occluded Chrome throttles the page, so its send button never enables in
+      // time and submission falls back to a (often ignored) Enter key. Raising
+      // the window ensures the page is visible/unthrottled for inject + submit.
+      if (AGENT_POPUP_FOCUSED && popup.windowId != null) {
+        try {
+          await browser.windows.update(popup.windowId, { focused: true, drawAttention: true });
+        } catch {
+          // ignore — window may have been closed
+        }
+        await sleep(600);
       }
 
       // Send the prompt and WAIT for the full response. The popup is the
