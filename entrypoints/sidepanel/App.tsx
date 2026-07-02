@@ -29,6 +29,13 @@ import type { ProbeResult, ProbeStep } from "../../utils/automation/types";
 
 type ActiveTab = "council" | "history";
 
+// Whether the developer tools (Run Diagnostics + Selector Probe) are shown in
+// the side panel. Controlled by the WXT_SHOW_DEV_TOOLS env flag (see .env); when
+// the flag is unset it defaults to dev-only (visible under `wxt dev`, hidden in
+// production builds).
+const SHOW_DEV_TOOLS =
+  (import.meta.env.WXT_SHOW_DEV_TOOLS ?? String(import.meta.env.DEV)) === "true";
+
 const idleSnapshot: CouncilSnapshot = { state: "idle", session: null };
 const agentApps = getAppsForRole("agent");
 const judgeApps = getAppsForRole("judge");
@@ -346,6 +353,8 @@ export default function App() {
                 Run council
               </button>
 
+              {SHOW_DEV_TOOLS ? (
+              <>
               <div className="diagnostic-block">
                 <button
                   className="secondary-action"
@@ -420,6 +429,8 @@ export default function App() {
                   </div>
                 ) : null}
               </div>
+              </>
+              ) : null}
             </form>
           )}
         </section>
