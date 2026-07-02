@@ -17,6 +17,10 @@ import { DEFAULT_AUTOMATION_TIMEOUTS } from "./types";
 import type { AppKey } from "../types";
 
 const STOP_BUTTON_POLL_INTERVAL_MS = 500;
+// How long to wait for the input element to render. Agents now open in a fresh
+// popup window per run (cold start), so heavy SPAs (Gemini, Qwen, Claude) need
+// more time to render their input than the old pre-warmed tabs did.
+const INPUT_READY_WAIT_MS = 30_000;
 const DOM_STABILIZATION_QUIET_MS = 6_000;
 const MIN_RESPONSE_LENGTH = 10;
 const SEND_CONFIRMATION_TIMEOUT_MS = 15_000;
@@ -133,10 +137,10 @@ async function runAgentInner(
   log(appKey, "Starting agent run", { promptLength: prompt.length });
 
   // Step 1: Wait for input
-  log(appKey, "Waiting for input element (10s grace)...");
-  const inputElement = await waitForInput(selectors.input, DEFAULT_AUTOMATION_TIMEOUTS.loginGraceMs);
+  log(appKey, "Waiting for input element...");
+  const inputElement = await waitForInput(selectors.input, INPUT_READY_WAIT_MS);
   if (!inputElement) {
-    log(appKey, "FAILED: input element not found after 10s");
+    log(appKey, "FAILED: input element not found");
     return { success: false, errorReason: "dom_error", completedAt: Date.now() };
   }
   log(appKey, "Input element found", { tag: inputElement.tagName, id: inputElement.id });
@@ -247,10 +251,10 @@ async function runJudgeInner(
   log(appKey, "Starting judge run", { promptLength: prompt.length });
 
   // Step 1: Wait for input
-  log(appKey, "Waiting for input element (10s grace)...");
-  const inputElement = await waitForInput(selectors.input, DEFAULT_AUTOMATION_TIMEOUTS.loginGraceMs);
+  log(appKey, "Waiting for input element...");
+  const inputElement = await waitForInput(selectors.input, INPUT_READY_WAIT_MS);
   if (!inputElement) {
-    log(appKey, "FAILED: input element not found after 10s");
+    log(appKey, "FAILED: input element not found");
     return { sent: false, errorReason: "dom_error" };
   }
 

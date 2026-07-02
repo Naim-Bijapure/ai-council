@@ -20,6 +20,13 @@ import {
   type SendConfirmationResult
 } from "./types";
 
+// Whether each agent popup is created focused. Focused = reliable: heavy SPAs
+// (Perplexity, Gemini, Qwen, Claude) are throttled and fail to render their
+// input in an occluded/unfocused window, so the popup must be the foreground
+// window while it loads and generates. Set to false to keep popups from
+// stealing focus, at the risk of those SPAs failing with "could not find input".
+const AGENT_POPUP_FOCUSED = true;
+
 export interface CouncilRunnerCallbacks {
   onUpdate: (session: ActiveCouncilSession) => void;
   onComplete: (session: ActiveCouncilSession) => void;
@@ -117,7 +124,8 @@ export async function runCouncil(
         getSupportedApp(key).newChatUrl,
         timeouts.tabLoadMs,
         timeouts.contentReadyMs,
-        key
+        key,
+        AGENT_POPUP_FOCUSED
       ).catch(() => null);
 
       if (checkCancelled()) {
