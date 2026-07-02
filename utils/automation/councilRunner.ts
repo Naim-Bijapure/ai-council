@@ -109,75 +109,99 @@ export async function runCouncil(
   try {
     if (checkCancelled()) return;
 
-    // Run each agent SEQUENTIALLY, each in its own dedicated popup window:
-    // open the popup → wait until ready → inject + wait for the full response →
-    // close the popup → move to the next agent.
+    // Run each agent SEQUENTIALLY inside ONE reused popup window: open the
+    // popup once for the first agent, then navigate that same window's tab to
+    // each subsequent agent's URL. Capture happens without closing the window
+    // between agents; the window is closed only after the last agent.
     //
-    // Why one popup at a time (not all tabs at once)? Chrome heavily throttles
-    // occluded/background pages — timers are clamped and heavy SPAs (Perplexity,
-    // Gemini) fail to render their input. Each popup is opened focused so it is
-    // the foreground window while it loads and generates, then closed, which
-    // returns focus to the user's window. Wall-clock time is the SUM of agent
-    // durations, which is the accepted tradeoff for reliable capture.
+    // Why one reused window (not one popup per agent)? Creating and closing a
+    // window per agent caused focus races — the next popup would open in the
+    // background and not raise. A single window is created focused once and
+    // re-raised before each injection. Submission uses a button CLICK (not the
+    // Enter key), so it does not depend on the window keeping OS focus, and
+    // completion is detected via MutationObserver, which is throttle-tolerant.
+    let popupWindowId: number | null = null;
+    let popupTabId: number | null = null;
+
     for (const key of agentKeys) {
       if (checkCancelled()) break;
 
       updateAgent(key, { status: "injecting", startedAt: Date.now() });
 
-      const popup = await openAgentPopupAndListenForReady(
-        getSupportedApp(key).newChatUrl,
-        timeouts.tabLoadMs,
-        timeouts.contentReadyMs,
-        key,
-        AGENT_POPUP_FOCUSED
-      ).catch(() => null);
+      const url = getSupportedApp(key).newChatUrl;
+      let loaded = false;
+      let contentReady = false;
+      let tabUrl: string | null = null;
 
-      if (checkCancelled()) {
-        await closeAgentWindow(state, popup?.windowId ?? null);
-        break;
+      if (popupTabId == null) {
+        // First agent: create the shared popup window.
+        const popup = await openAgentPopupAndListenForReady(
+          url,
+          timeouts.tabLoadMs,
+          timeouts.contentReadyMs,
+          key,
+          AGENT_POPUP_FOCUSED
+        ).catch(() => null);
+        if (popup?.windowId != null) {
+          popupWindowId = popup.windowId;
+          state.currentAgentWindowId = popup.windowId;
+        }
+        if (popup?.tabId != null && popup.tabId >= 0) {
+          popupTabId = popup.tabId;
+        }
+        loaded = popup?.loaded ?? false;
+        contentReady = popup?.contentReady ?? false;
+        tabUrl = popup?.tabUrl ?? null;
+      } else {
+        // Subsequent agents: reuse the window, navigate its tab to the new URL.
+        try {
+          await browser.tabs.update(popupTabId, { url, active: true });
+        } catch {
+          // tab may have been closed — will fail readiness below
+        }
+        const ready = await openTabAndListenForReadyOnExistingTab(
+          popupTabId,
+          url,
+          timeouts.tabLoadMs,
+          timeouts.contentReadyMs,
+          key
+        ).catch(() => null);
+        loaded = ready?.loaded ?? false;
+        contentReady = ready?.contentReady ?? false;
+        tabUrl = ready?.tabUrl ?? null;
       }
 
-      if (popup?.windowId != null) {
-        state.currentAgentWindowId = popup.windowId;
-      }
+      if (checkCancelled()) break;
 
       // Readiness gating.
-      if (!popup || popup.tabId == null || popup.tabId < 0 || !popup.loaded) {
+      if (popupTabId == null || !loaded) {
         updateAgent(key, { status: "error", errorReason: "tab_load_timeout", completedAt: Date.now() });
-        await closeAgentWindow(state, popup?.windowId ?? null);
         continue;
       }
-      if (!popup.contentReady) {
+      if (!contentReady) {
         updateAgent(key, { status: "error", errorReason: "content_script_timeout", completedAt: Date.now() });
-        await closeAgentWindow(state, popup.windowId);
         continue;
       }
 
-      state.agentTabIds.set(key, popup.tabId);
-      if (!session.agentTabUrl && popup.tabUrl) {
-        session = update({ agentTabUrl: popup.tabUrl });
+      state.agentTabIds.set(key, popupTabId);
+      if (!session.agentTabUrl && tabUrl) {
+        session = update({ agentTabUrl: tabUrl });
       }
 
-      // Force the popup to the foreground and give it a moment to settle before
-      // injecting. Some apps (Claude) end up in the background after load; while
-      // occluded Chrome throttles the page, so its send button never enables in
-      // time and submission falls back to a (often ignored) Enter key. Raising
-      // the window ensures the page is visible/unthrottled for inject + submit.
-      if (AGENT_POPUP_FOCUSED && popup.windowId != null) {
+      // Re-raise the window and let it settle so the page is visible before
+      // injecting. Submission clicks the send button (focus-independent), so
+      // this is best-effort rather than required.
+      if (AGENT_POPUP_FOCUSED && popupWindowId != null) {
         try {
-          await browser.windows.update(popup.windowId, { focused: true, drawAttention: true });
+          await browser.windows.update(popupWindowId, { focused: true });
         } catch {
           // ignore — window may have been closed
         }
         await sleep(600);
       }
 
-      // Send the prompt and WAIT for the full response. The popup is the
-      // foreground window, so completion detection runs at full speed.
-      const adapterResult = await sendAgentRun(key, popup.tabId, session.prompt, timeouts, state);
-
-      // Capture done — close the popup before moving on.
-      await closeAgentWindow(state, popup.windowId);
+      // Send the prompt and WAIT for the full response.
+      const adapterResult = await sendAgentRun(key, popupTabId, session.prompt, timeouts, state);
       state.agentTabIds.delete(key);
 
       if (checkCancelled()) break;
@@ -197,6 +221,9 @@ export async function runCouncil(
         completedAt: adapterResult.completedAt ?? Date.now()
       });
     }
+
+    // All agents processed — close the shared popup window.
+    await closeAgentWindow(state, popupWindowId);
 
     if (checkCancelled()) return;
 
