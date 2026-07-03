@@ -44,8 +44,11 @@ interface ActiveRunState {
   tabListeners: Array<() => void>;
   messageListeners: Array<() => void>;
   agentTabIds: Map<AppKey, number>;
-  // The agent popup window currently open (one at a time). Tracked so it can be
-  // closed on cancellation/cleanup.
+  // Parallel mode: one popup window per agent, all open at once. Tracked so
+  // they can be closed on completion/cancellation.
+  agentWindowIds: Map<AppKey, number>;
+  // Sequential mode: the single agent popup window currently open. Tracked so
+  // it can be closed on cancellation/cleanup.
   currentAgentWindowId: number | null;
   judgeTabId: number | null;
   judgeWindowId: number | null;
@@ -67,6 +70,7 @@ export async function runCouncil(
     tabListeners: [],
     messageListeners: [],
     agentTabIds: new Map(),
+    agentWindowIds: new Map(),
     currentAgentWindowId: null,
     judgeTabId: null,
     judgeWindowId
@@ -109,121 +113,195 @@ export async function runCouncil(
   try {
     if (checkCancelled()) return;
 
-    // Run each agent SEQUENTIALLY inside ONE reused popup window: open the
-    // popup once for the first agent, then navigate that same window's tab to
-    // each subsequent agent's URL. Capture happens without closing the window
-    // between agents; the window is closed only after the last agent.
-    //
-    // Why one reused window (not one popup per agent)? Creating and closing a
-    // window per agent caused focus races — the next popup would open in the
-    // background and not raise. A single window is created focused once and
-    // re-raised before each injection. Submission uses a button CLICK (not the
-    // Enter key), so it does not depend on the window keeping OS focus, and
-    // completion is detected via MutationObserver, which is throttle-tolerant.
-    let popupWindowId: number | null = null;
-    let popupTabId: number | null = null;
+    if (session.parallelMode) {
+      // PARALLEL MODE: same popup flow as sequential, but every agent gets its
+      // OWN popup window and they all run at the same time. Popups are visible
+      // windows, so Chrome keeps rendering them even when they are not the
+      // focused window (unlike hidden background tabs, which get throttled and
+      // never finish mounting heavy SPA inputs/responses). Only one popup can
+      // hold keyboard focus, but submission is a button CLICK and completion
+      // is a MutationObserver — neither needs focus. Each popup is cascaded so
+      // they don't fully overlap, and closes as soon as its agent finishes.
+      await Promise.all(
+        agentKeys.map(async (key, index) => {
+          if (checkCancelled()) return;
 
-    for (const key of agentKeys) {
-      if (checkCancelled()) break;
+          updateAgent(key, { status: "injecting", startedAt: Date.now() });
 
-      updateAgent(key, { status: "injecting", startedAt: Date.now() });
+          const url = getSupportedApp(key).newChatUrl;
+          const popup = await openAgentPopupAndListenForReady(
+            url,
+            timeouts.tabLoadMs,
+            timeouts.contentReadyMs,
+            key,
+            AGENT_POPUP_FOCUSED,
+            { left: 60 + index * 48, top: 60 + index * 48 }
+          ).catch(() => null);
 
-      const url = getSupportedApp(key).newChatUrl;
-      let loaded = false;
-      let contentReady = false;
-      let tabUrl: string | null = null;
+          if (popup?.windowId != null) {
+            state.agentWindowIds.set(key, popup.windowId);
+          }
+          const tabId = popup != null && popup.tabId >= 0 ? popup.tabId : null;
+          if (tabId != null) {
+            state.agentTabIds.set(key, tabId);
+          }
 
-      if (popupTabId == null) {
-        // First agent: create the shared popup window.
-        const popup = await openAgentPopupAndListenForReady(
-          url,
-          timeouts.tabLoadMs,
-          timeouts.contentReadyMs,
-          key,
-          AGENT_POPUP_FOCUSED
-        ).catch(() => null);
-        if (popup?.windowId != null) {
-          popupWindowId = popup.windowId;
-          state.currentAgentWindowId = popup.windowId;
+          if (checkCancelled()) return;
+
+          if (tabId == null || !popup?.loaded) {
+            updateAgent(key, { status: "error", errorReason: "tab_load_timeout", completedAt: Date.now() });
+            await closeAgentPopup(state, key);
+            return;
+          }
+          if (!popup.contentReady) {
+            updateAgent(key, { status: "error", errorReason: "content_script_timeout", completedAt: Date.now() });
+            await closeAgentPopup(state, key);
+            return;
+          }
+
+          if (!session.agentTabUrl && popup.tabUrl) {
+            session = update({ agentTabUrl: popup.tabUrl });
+          }
+
+          // Send the prompt and WAIT for the full response, then close the popup.
+          const adapterResult = await sendAgentRun(key, tabId, session.prompt, timeouts, state);
+          await closeAgentPopup(state, key);
+
+          if (checkCancelled()) return;
+
+          if (!adapterResult.success) {
+            updateAgent(key, {
+              status: "error",
+              errorReason: adapterResult.errorReason ?? "dom_error",
+              completedAt: Date.now()
+            });
+            return;
+          }
+
+          updateAgent(key, {
+            status: "done",
+            responseText: adapterResult.responseText ?? "",
+            completedAt: adapterResult.completedAt ?? Date.now()
+          });
+        })
+      );
+    } else {
+      // Run each agent SEQUENTIALLY inside ONE reused popup window: open the
+      // popup once for the first agent, then navigate that same window's tab to
+      // each subsequent agent's URL. Capture happens without closing the window
+      // between agents; the window is closed only after the last agent.
+      //
+      // Why one reused window (not one popup per agent)? Creating and closing a
+      // window per agent caused focus races — the next popup would open in the
+      // background and not raise. A single window is created focused once and
+      // re-raised before each injection. Submission uses a button CLICK (not the
+      // Enter key), so it does not depend on the window keeping OS focus, and
+      // completion is detected via MutationObserver, which is throttle-tolerant.
+      let popupWindowId: number | null = null;
+      let popupTabId: number | null = null;
+
+      for (const key of agentKeys) {
+        if (checkCancelled()) break;
+
+        updateAgent(key, { status: "injecting", startedAt: Date.now() });
+
+        const url = getSupportedApp(key).newChatUrl;
+        let loaded = false;
+        let contentReady = false;
+        let tabUrl: string | null = null;
+
+        if (popupTabId == null) {
+          // First agent: create the shared popup window.
+          const popup = await openAgentPopupAndListenForReady(
+            url,
+            timeouts.tabLoadMs,
+            timeouts.contentReadyMs,
+            key,
+            AGENT_POPUP_FOCUSED
+          ).catch(() => null);
+          if (popup?.windowId != null) {
+            popupWindowId = popup.windowId;
+            state.currentAgentWindowId = popup.windowId;
+          }
+          if (popup?.tabId != null && popup.tabId >= 0) {
+            popupTabId = popup.tabId;
+          }
+          loaded = popup?.loaded ?? false;
+          contentReady = popup?.contentReady ?? false;
+          tabUrl = popup?.tabUrl ?? null;
+        } else {
+          // Subsequent agents: reuse the window, navigate its tab to the new URL.
+          try {
+            await browser.tabs.update(popupTabId, { url, active: true });
+          } catch {
+            // tab may have been closed — will fail readiness below
+          }
+          const ready = await openTabAndListenForReadyOnExistingTab(
+            popupTabId,
+            url,
+            timeouts.tabLoadMs,
+            timeouts.contentReadyMs,
+            key
+          ).catch(() => null);
+          loaded = ready?.loaded ?? false;
+          contentReady = ready?.contentReady ?? false;
+          tabUrl = ready?.tabUrl ?? null;
         }
-        if (popup?.tabId != null && popup.tabId >= 0) {
-          popupTabId = popup.tabId;
+
+        if (checkCancelled()) break;
+
+        // Readiness gating.
+        if (popupTabId == null || !loaded) {
+          updateAgent(key, { status: "error", errorReason: "tab_load_timeout", completedAt: Date.now() });
+          continue;
         }
-        loaded = popup?.loaded ?? false;
-        contentReady = popup?.contentReady ?? false;
-        tabUrl = popup?.tabUrl ?? null;
-      } else {
-        // Subsequent agents: reuse the window, navigate its tab to the new URL.
-        try {
-          await browser.tabs.update(popupTabId, { url, active: true });
-        } catch {
-          // tab may have been closed — will fail readiness below
+        if (!contentReady) {
+          updateAgent(key, { status: "error", errorReason: "content_script_timeout", completedAt: Date.now() });
+          continue;
         }
-        const ready = await openTabAndListenForReadyOnExistingTab(
-          popupTabId,
-          url,
-          timeouts.tabLoadMs,
-          timeouts.contentReadyMs,
-          key
-        ).catch(() => null);
-        loaded = ready?.loaded ?? false;
-        contentReady = ready?.contentReady ?? false;
-        tabUrl = ready?.tabUrl ?? null;
-      }
 
-      if (checkCancelled()) break;
-
-      // Readiness gating.
-      if (popupTabId == null || !loaded) {
-        updateAgent(key, { status: "error", errorReason: "tab_load_timeout", completedAt: Date.now() });
-        continue;
-      }
-      if (!contentReady) {
-        updateAgent(key, { status: "error", errorReason: "content_script_timeout", completedAt: Date.now() });
-        continue;
-      }
-
-      state.agentTabIds.set(key, popupTabId);
-      if (!session.agentTabUrl && tabUrl) {
-        session = update({ agentTabUrl: tabUrl });
-      }
-
-      // Re-raise the window and let it settle so the page is visible before
-      // injecting. Submission clicks the send button (focus-independent), so
-      // this is best-effort rather than required.
-      if (AGENT_POPUP_FOCUSED && popupWindowId != null) {
-        try {
-          await browser.windows.update(popupWindowId, { focused: true });
-        } catch {
-          // ignore — window may have been closed
+        state.agentTabIds.set(key, popupTabId);
+        if (!session.agentTabUrl && tabUrl) {
+          session = update({ agentTabUrl: tabUrl });
         }
-        await sleep(600);
-      }
 
-      // Send the prompt and WAIT for the full response.
-      const adapterResult = await sendAgentRun(key, popupTabId, session.prompt, timeouts, state);
-      state.agentTabIds.delete(key);
+        // Re-raise the window and let it settle so the page is visible before
+        // injecting. Submission clicks the send button (focus-independent), so
+        // this is best-effort rather than required.
+        if (AGENT_POPUP_FOCUSED && popupWindowId != null) {
+          try {
+            await browser.windows.update(popupWindowId, { focused: true });
+          } catch {
+            // ignore — window may have been closed
+          }
+          await sleep(600);
+        }
 
-      if (checkCancelled()) break;
+        // Send the prompt and WAIT for the full response.
+        const adapterResult = await sendAgentRun(key, popupTabId, session.prompt, timeouts, state);
+        state.agentTabIds.delete(key);
 
-      if (!adapterResult.success) {
+        if (checkCancelled()) break;
+
+        if (!adapterResult.success) {
+          updateAgent(key, {
+            status: "error",
+            errorReason: adapterResult.errorReason ?? "dom_error",
+            completedAt: Date.now()
+          });
+          continue;
+        }
+
         updateAgent(key, {
-          status: "error",
-          errorReason: adapterResult.errorReason ?? "dom_error",
-          completedAt: Date.now()
+          status: "done",
+          responseText: adapterResult.responseText ?? "",
+          completedAt: adapterResult.completedAt ?? Date.now()
         });
-        continue;
       }
 
-      updateAgent(key, {
-        status: "done",
-        responseText: adapterResult.responseText ?? "",
-        completedAt: adapterResult.completedAt ?? Date.now()
-      });
+      // All agents processed — close the shared popup window.
+      await closeAgentWindow(state, popupWindowId);
     }
-
-    // All agents processed — close the shared popup window.
-    await closeAgentWindow(state, popupWindowId);
 
     if (checkCancelled()) return;
 
@@ -894,6 +972,22 @@ async function finalizeSession(
 }
 
 /**
+ * Closes a parallel-mode agent's popup window (if tracked) and clears it from
+ * the run state. Safe to call for an already-closed window.
+ */
+async function closeAgentPopup(state: ActiveRunState, key: AppKey): Promise<void> {
+  state.agentTabIds.delete(key);
+  const windowId = state.agentWindowIds.get(key);
+  if (windowId == null) return;
+  state.agentWindowIds.delete(key);
+  try {
+    await browser.windows.remove(windowId);
+  } catch {
+    // Window may already be closed — ignore.
+  }
+}
+
+/**
  * Closes an agent popup window (if any) and clears it from the run state.
  * Safe to call with a null windowId or an already-closed window.
  */
@@ -916,7 +1010,18 @@ function cleanup(state: ActiveRunState): void {
   state.tabListeners = [];
   state.messageListeners.forEach((fn) => fn());
   state.messageListeners = [];
-  // Close any agent popup still open (e.g. on cancellation).
+  // Close any parallel-mode agent popups still open (e.g. on cancellation).
+  if (state.agentWindowIds.size > 0) {
+    const windowIds = [...state.agentWindowIds.values()];
+    state.agentWindowIds.clear();
+    state.agentTabIds.clear();
+    for (const windowId of windowIds) {
+      void browser.windows.remove(windowId).catch(() => {
+        // already closed — ignore
+      });
+    }
+  }
+  // Close any sequential-mode agent popup still open (e.g. on cancellation).
   if (state.currentAgentWindowId != null) {
     const windowId = state.currentAgentWindowId;
     state.currentAgentWindowId = null;

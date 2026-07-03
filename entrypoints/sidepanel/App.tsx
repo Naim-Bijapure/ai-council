@@ -66,6 +66,7 @@ export default function App() {
   const [judgeKey, setJudgeKey] = useState<AppKey>(
     judgeApps.length > 0 ? judgeApps[0].key : "chatgpt"
   );
+  const [parallelMode, setParallelMode] = useState(false);
   const [snapshot, setSnapshot] = useState<CouncilSnapshot>(idleSnapshot);
   const [history, setHistory] = useState<StoredCouncilSession[]>([]);
   const [error, setError] = useState("");
@@ -113,7 +114,7 @@ export default function App() {
     if (!loading) {
       void savePreferences();
     }
-  }, [selectedAgents, judgeKey]);
+  }, [selectedAgents, judgeKey, parallelMode]);
 
   async function sendMessage(request: PanelRequest): Promise<PanelResponse> {
     return browser.runtime.sendMessage(request);
@@ -134,6 +135,7 @@ export default function App() {
         if (response.preferences.judgeKey) {
           setJudgeKey(response.preferences.judgeKey);
         }
+        setParallelMode(response.preferences.parallelMode === true);
       }
     } else {
       setError(response.error);
@@ -145,7 +147,8 @@ export default function App() {
   async function savePreferences(): Promise<void> {
     const preferences: CouncilPreferences = {
       selectedAgentKeys: selectedAgents,
-      judgeKey
+      judgeKey,
+      parallelMode
     };
     await sendMessage({ type: "SAVE_PREFERENCES", preferences });
   }
@@ -178,7 +181,8 @@ export default function App() {
       request: {
         prompt,
         agentKeys: selectedAgents,
-        judgeKey
+        judgeKey,
+        parallelMode
       }
     });
 
@@ -332,6 +336,15 @@ export default function App() {
                   </option>
                 ))}
               </select>
+
+              <label className="check-row parallel-toggle">
+                <input
+                  type="checkbox"
+                  checked={parallelMode}
+                  onChange={(event) => setParallelMode(event.target.checked)}
+                />
+                <span>Parallel mode — run all agents at once, each in its own popup</span>
+              </label>
 
               <label className="field-label" htmlFor="prompt">Prompt</label>
               <textarea

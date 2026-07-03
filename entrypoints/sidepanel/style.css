@@ -185,6 +185,15 @@ select {
   cursor: not-allowed;
 }
 
+.parallel-toggle {
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.parallel-toggle span {
+  white-space: normal;
+}
+
 .primary-action,
 .secondary-action,
 .danger-action {

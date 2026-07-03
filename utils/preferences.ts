@@ -6,7 +6,8 @@ const STORAGE_KEY = "aiCouncilPreferences";
 
 export const DEFAULT_PREFERENCES: CouncilPreferences = {
   selectedAgentKeys: DEFAULT_AGENT_KEYS,
-  judgeKey: DEFAULT_JUDGE_KEY
+  judgeKey: DEFAULT_JUDGE_KEY,
+  parallelMode: false
 };
 
 export async function getPreferences(): Promise<CouncilPreferences> {
@@ -23,7 +24,8 @@ export async function getPreferences(): Promise<CouncilPreferences> {
 
   const preferences: CouncilPreferences = {
     selectedAgentKeys: selectedAgentKeys.length > 0 ? selectedAgentKeys : DEFAULT_AGENT_KEYS,
-    judgeKey
+    judgeKey,
+    parallelMode: saved.parallelMode === true
   };
 
   await savePreferences(preferences);
@@ -34,7 +36,8 @@ export async function savePreferences(preferences: CouncilPreferences): Promise<
   const selectedAgentKeys = normalizeAppKeys(preferences.selectedAgentKeys);
   const safePreferences: CouncilPreferences = {
     selectedAgentKeys: selectedAgentKeys.length > 0 ? selectedAgentKeys : DEFAULT_AGENT_KEYS,
-    judgeKey: isAppKey(preferences.judgeKey) ? preferences.judgeKey : DEFAULT_JUDGE_KEY
+    judgeKey: isAppKey(preferences.judgeKey) ? preferences.judgeKey : DEFAULT_JUDGE_KEY,
+    parallelMode: preferences.parallelMode === true
   };
 
   await browser.storage.sync.set({ [STORAGE_KEY]: safePreferences });

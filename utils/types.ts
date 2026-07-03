@@ -55,6 +55,9 @@ export interface SupportedApp {
 export interface CouncilPreferences {
   selectedAgentKeys: AppKey[];
   judgeKey: AppKey;
+  // When true, all agents run at once, each in its own popup window, instead
+  // of the default one-at-a-time single-popup flow.
+  parallelMode: boolean;
 }
 
 export interface AgentResult {
@@ -78,6 +81,7 @@ export interface ActiveCouncilSession {
   agentTabUrl: string | null;
   status: SessionStatus;
   durationMs: number;
+  parallelMode?: boolean;
   judgePrompt?: string;
   errorMessage?: string;
 }
@@ -101,6 +105,7 @@ export interface RunCouncilRequest {
   prompt: string;
   agentKeys: AppKey[];
   judgeKey: AppKey;
+  parallelMode?: boolean;
 }
 
 export type PanelRequest =

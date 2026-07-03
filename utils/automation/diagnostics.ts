@@ -251,7 +251,8 @@ export async function openAgentPopupAndListenForReady(
   tabLoadTimeoutMs: number,
   contentReadyTimeoutMs: number,
   appKey: AppKey,
-  focused = true
+  focused = true,
+  position?: { left: number; top: number }
 ): Promise<PopupLoadResult> {
   return new Promise<PopupLoadResult>((resolve) => {
     let settled = false;
@@ -310,7 +311,7 @@ export async function openAgentPopupAndListenForReady(
     browser.tabs.onUpdated.addListener(tabListener);
 
     void browser.windows
-      .create({ url, type: "popup", focused, width: 1024, height: 800 })
+      .create({ url, type: "popup", focused, width: 1024, height: 800, ...(position ?? {}) })
       .then((win) => {
         if (!win) {
           done(null);
