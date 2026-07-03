@@ -52,7 +52,13 @@ export interface SupportedApp {
   newChatUrl: string;
 }
 
+// The type of council flow the user has selected. "agentJudge" is the
+// existing agents-answer-then-judge-decides flow. "relay" is a UI-only
+// placeholder for now — no run logic is wired up yet.
+export type CouncilType = "agentJudge" | "relay";
+
 export interface CouncilPreferences {
+  councilType: CouncilType;
   selectedAgentKeys: AppKey[];
   judgeKey: AppKey;
   // When true, all agents run at once, each in its own popup window, instead

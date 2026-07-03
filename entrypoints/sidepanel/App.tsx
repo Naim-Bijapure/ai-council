@@ -8,6 +8,8 @@ import {
   truncateText
 } from "../../utils/format";
 import {
+  DEFAULT_AGENT_KEYS,
+  DEFAULT_JUDGE_KEY,
   getAppsForRole,
   SUPPORTED_APPS,
   type SupportedAppWithRoles
@@ -19,6 +21,7 @@ import {
   type BackgroundEvent,
   type CouncilPreferences,
   type CouncilSnapshot,
+  type CouncilType,
   type DiagnosticReport,
   type JudgeStepStatus,
   type PanelRequest,
@@ -26,6 +29,8 @@ import {
   type StoredCouncilSession
 } from "../../utils/types";
 import type { ProbeResult, ProbeStep } from "../../utils/automation/types";
+import { AgentOrderList } from "./components/AgentOrderList";
+import { reorderAgents } from "../../utils/agentOrdering";
 
 type ActiveTab = "council" | "history";
 
@@ -48,6 +53,11 @@ const JUDGE_STEP_LABELS: Record<JudgeStepStatus, string> = {
   timeout: "Judge timed out"
 };
 
+const COUNCIL_TYPE_LABELS: Record<CouncilType, string> = {
+  agentJudge: "Agent → Judge Council",
+  relay: "Relay Council"
+};
+
 const APP_LABELS: Record<string, string> = {
   chatgpt: "ChatGPT",
   claude: "Claude",
@@ -59,13 +69,10 @@ const APP_LABELS: Record<string, string> = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("council");
+  const [councilType, setCouncilType] = useState<CouncilType>("agentJudge");
   const [prompt, setPrompt] = useState("");
-  const [selectedAgents, setSelectedAgents] = useState<AppKey[]>(() =>
-    agentApps.map((a) => a.key)
-  );
-  const [judgeKey, setJudgeKey] = useState<AppKey>(
-    judgeApps.length > 0 ? judgeApps[0].key : "chatgpt"
-  );
+  const [selectedAgents, setSelectedAgents] = useState<AppKey[]>(DEFAULT_AGENT_KEYS);
+  const [judgeKey, setJudgeKey] = useState<AppKey>(DEFAULT_JUDGE_KEY);
   const [parallelMode, setParallelMode] = useState(false);
   const [snapshot, setSnapshot] = useState<CouncilSnapshot>(idleSnapshot);
   const [history, setHistory] = useState<StoredCouncilSession[]>([]);
@@ -114,7 +121,7 @@ export default function App() {
     if (!loading) {
       void savePreferences();
     }
-  }, [selectedAgents, judgeKey, parallelMode]);
+  }, [councilType, selectedAgents, judgeKey, parallelMode]);
 
   async function sendMessage(request: PanelRequest): Promise<PanelResponse> {
     return browser.runtime.sendMessage(request);
@@ -129,6 +136,9 @@ export default function App() {
       setHistory(response.history ?? []);
 
       if (response.preferences) {
+        if (response.preferences.councilType) {
+          setCouncilType(response.preferences.councilType);
+        }
         if (response.preferences.selectedAgentKeys.length > 0) {
           setSelectedAgents(response.preferences.selectedAgentKeys);
         }
@@ -146,6 +156,7 @@ export default function App() {
 
   async function savePreferences(): Promise<void> {
     const preferences: CouncilPreferences = {
+      councilType,
       selectedAgentKeys: selectedAgents,
       judgeKey,
       parallelMode
@@ -167,6 +178,13 @@ export default function App() {
         ? prev.filter((k) => k !== key)
         : [...prev, key]
     );
+  }
+
+  function handleReorder(sourceKey: AppKey, targetKey: AppKey): void {
+    setSelectedAgents((prev) => {
+      const newOrder = reorderAgents(prev, sourceKey, targetKey);
+      return newOrder;
+    });
   }
 
   // When judge changes, deselect it from agents if selected
@@ -271,7 +289,11 @@ export default function App() {
       <header className="topbar">
         <div>
           <h1>AI Council</h1>
-          <p>{selectedAgents.length} agent{selectedAgents.length !== 1 ? "s" : ""} &rarr; {formatAppName(judgeKey)} judge</p>
+          {councilType === "agentJudge" ? (
+            <p>{selectedAgents.length} agent{selectedAgents.length !== 1 ? "s" : ""} &rarr; {formatAppName(judgeKey)} judge</p>
+          ) : (
+            <p>Relay council — configuration coming soon</p>
+          )}
         </div>
         <div className="tabs" role="tablist" aria-label="AI Council sections">
           <button className={activeTab === "council" ? "active" : ""} onClick={() => setActiveTab("council")}>
@@ -299,52 +321,23 @@ export default function App() {
               className="council-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canRun) {
+                if (canRun && councilType === "agentJudge") {
                   void runCouncil();
                 }
               }}
             >
-              <fieldset className="option-group">
-                <legend>Agents</legend>
-                <div className="agent-grid">
-                  {agentApps.map((app) => {
-                    const isJudge = app.key === judgeKey;
-                    return (
-                      <label key={app.key} className={`check-row${isJudge ? " disabled" : ""}`}>
-                        <input
-                          type="checkbox"
-                          checked={selectedAgents.includes(app.key)}
-                          onChange={() => toggleAgent(app.key)}
-                          disabled={isJudge}
-                        />
-                        <span>{app.displayName}{isJudge ? " (Judge)" : ""}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
-
-              <label className="field-label" htmlFor="judge">Judge</label>
+              <label className="field-label" htmlFor="council-type">Choose council</label>
               <select
-                id="judge"
-                value={judgeKey}
-                onChange={(event) => setJudgeKey(event.target.value as AppKey)}
+                id="council-type"
+                value={councilType}
+                onChange={(event) => setCouncilType(event.target.value as CouncilType)}
               >
-                {judgeApps.map((app) => (
-                  <option key={app.key} value={app.key}>
-                    {app.displayName}
+                {(Object.keys(COUNCIL_TYPE_LABELS) as CouncilType[]).map((type) => (
+                  <option key={type} value={type}>
+                    {COUNCIL_TYPE_LABELS[type]}
                   </option>
                 ))}
               </select>
-
-              <label className="check-row parallel-toggle">
-                <input
-                  type="checkbox"
-                  checked={parallelMode}
-                  onChange={(event) => setParallelMode(event.target.checked)}
-                />
-                <span>Parallel mode — run all agents at once, each in its own popup</span>
-              </label>
 
               <label className="field-label" htmlFor="prompt">Prompt</label>
               <textarea
@@ -357,16 +350,61 @@ export default function App() {
               <div className={promptTooLong ? "counter danger" : "counter"}>
                 {formatCharacterCount(prompt.length, MAX_USER_PROMPT_LENGTH)}
               </div>
-
-              {error ? <div className="inline-error">{error}</div> : null}
               {promptTooLong ? <div className="inline-error">Prompt is too long.</div> : null}
-              {selectedAgents.length === 0 ? <div className="inline-error">Select at least one agent.</div> : null}
 
-              <button className="primary-action" disabled={!canRun} type="submit">
-                Run council
-              </button>
+              {councilType === "agentJudge" ? (
+                <>
+                  <label className="field-label" htmlFor="judge">Judge</label>
+                  <select
+                    id="judge"
+                    value={judgeKey}
+                    onChange={(event) => setJudgeKey(event.target.value as AppKey)}
+                  >
+                    {judgeApps.map((app) => (
+                      <option key={app.key} value={app.key}>
+                        {app.displayName}
+                      </option>
+                    ))}
+                  </select>
 
-              {SHOW_DEV_TOOLS ? (
+                  <fieldset className="option-group">
+                    <legend>Agents</legend>
+                    <AgentOrderList
+                      agents={agentApps}
+                      selectedKeys={selectedAgents}
+                      judgeKey={judgeKey}
+                      onToggle={toggleAgent}
+                      onReorder={handleReorder}
+                    />
+                  </fieldset>
+
+                  <label className="check-row parallel-toggle">
+                    <input
+                      type="checkbox"
+                      checked={parallelMode}
+                      onChange={(event) => setParallelMode(event.target.checked)}
+                    />
+                    <span>Parallel mode — run all agents at once, each in its own popup</span>
+                  </label>
+
+                  {error ? <div className="inline-error">{error}</div> : null}
+                  {selectedAgents.length === 0 ? <div className="inline-error">Select at least one agent.</div> : null}
+
+                  <button className="primary-action" disabled={!canRun} type="submit">
+                    Run council
+                  </button>
+                </>
+              ) : (
+                <RelayCouncilPlaceholder
+                  agents={agentApps}
+                  selectedKeys={selectedAgents}
+                  judgeKey={judgeKey}
+                  onToggle={toggleAgent}
+                  onReorder={handleReorder}
+                />
+              )}
+
+              {SHOW_DEV_TOOLS && councilType === "agentJudge" ? (
               <>
               <div className="diagnostic-block">
                 <button
@@ -451,6 +489,53 @@ export default function App() {
         <HistoryView history={history} onClearHistory={clearHistory} />
       )}
     </main>
+  );
+}
+
+interface RelayCouncilPlaceholderProps {
+  agents: SupportedAppWithRoles[];
+  selectedKeys: AppKey[];
+  judgeKey: AppKey;
+  onToggle: (key: AppKey) => void;
+  onReorder: (sourceKey: AppKey, targetKey: AppKey) => void;
+}
+
+/**
+ * UI-only placeholder for the Relay Council flow. Reuses the same agent
+ * selection/ordering list as the Agent → Judge council (relay order matters
+ * since each agent's output feeds the next), but the run logic is not wired
+ * up yet — this is deliberately non-functional until the follow-up change.
+ */
+function RelayCouncilPlaceholder({
+  agents,
+  selectedKeys,
+  judgeKey,
+  onToggle,
+  onReorder
+}: RelayCouncilPlaceholderProps) {
+  return (
+    <>
+      <fieldset className="option-group">
+        <legend>Relay order</legend>
+        <AgentOrderList
+          agents={agents}
+          selectedKeys={selectedKeys}
+          judgeKey={judgeKey}
+          onToggle={onToggle}
+          onReorder={onReorder}
+        />
+      </fieldset>
+
+      <div className="coming-soon-note">
+        Relay council is coming soon — agents will pass their response to the
+        next agent in the chain. Selection and ordering are saved, but running
+        a relay isn't wired up yet.
+      </div>
+
+      <button className="primary-action" disabled type="button">
+        Run relay (coming soon)
+      </button>
+    </>
   );
 }
 

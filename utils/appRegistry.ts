@@ -60,13 +60,16 @@ export const SUPPORTED_APPS: SupportedAppWithRoles[] = VALID_APPS.map((app) => (
   loginUrlPatterns: app.loginUrlPatterns ?? []
 }));
 
-export const DEFAULT_AGENT_KEYS: AppKey[] = SUPPORTED_APPS.filter((app) =>
-  app.automationRoles.includes("agent")
-).map((app) => app.key);
-
+// Judge default is resolved first so the default agent list can exclude it —
+// every app currently supports both roles, so without this ordering the
+// default judge (e.g. ChatGPT) would also be pre-selected as an agent.
 export const DEFAULT_JUDGE_KEY: AppKey = SUPPORTED_APPS.find((app) =>
   app.automationRoles.includes("judge")
 )?.key ?? "chatgpt";
+
+export const DEFAULT_AGENT_KEYS: AppKey[] = SUPPORTED_APPS.filter((app) =>
+  app.automationRoles.includes("agent") && app.key !== DEFAULT_JUDGE_KEY
+).map((app) => app.key);
 
 export function getSupportedApp(key: AppKey): SupportedAppWithRoles {
   const app = SUPPORTED_APPS.find((candidate) => candidate.key === key);
