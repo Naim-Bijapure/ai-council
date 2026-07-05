@@ -231,6 +231,16 @@ export default function App() {
 
   async function runCouncil(): Promise<void> {
     setError("");
+    // Get the current window ID to ensure the judge opens in the same window
+    // as the side panel (not the last focused window which could be a chat tab)
+    let windowId: number | undefined;
+    try {
+      const window = await browser.windows.getCurrent();
+      windowId = window.id;
+    } catch {
+      // ignore
+    }
+    
     const response = await sendMessage({
       type: "RUN_COUNCIL",
       request: {
@@ -238,7 +248,8 @@ export default function App() {
         agentKeys: selectedAgents,
         judgeKey,
         parallelMode,
-        silentMode
+        silentMode,
+        windowId
       }
     });
 

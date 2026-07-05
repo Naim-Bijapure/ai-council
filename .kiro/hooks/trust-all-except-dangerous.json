@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Trust All Except Dangerous Commands",
+      "trigger": "PreToolUse",
+      "description": "Auto-trusts all bash commands except dangerous ones like rm, git push --force, etc.",
+      "matcher": "execute_bash",
+      "action": {
+        "type": "command",
+        "command": "node /home/naim/Docker_Env/Node/Projects/ai_counceling_extension/.kiro/hooks/check-dangerous-command.js"
+      }
+    }
+  ]
+}

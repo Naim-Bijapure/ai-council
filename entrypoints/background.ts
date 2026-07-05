@@ -168,7 +168,7 @@ async function startCouncil(request: RunCouncilRequest): Promise<PanelResponse> 
       void broadcastSnapshot();
     },
     isCancelled: () => cancelFlag
-  });
+  }, DEFAULT_AUTOMATION_TIMEOUTS, request.windowId);
 
   return { ok: true, snapshot: getSnapshot() };
 }

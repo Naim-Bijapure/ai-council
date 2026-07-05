@@ -117,6 +117,7 @@ export interface RunCouncilRequest {
   judgeKey: AppKey;
   parallelMode?: boolean;
   silentMode?: boolean;
+  windowId?: number;
 }
 
 export type PanelRequest =

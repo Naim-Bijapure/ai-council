@@ -57,11 +57,12 @@ interface ActiveRunState {
 export async function runCouncil(
   session: ActiveCouncilSession,
   callbacks: CouncilRunnerCallbacks,
-  timeouts: AutomationTimeouts = DEFAULT_AUTOMATION_TIMEOUTS
+  timeouts: AutomationTimeouts = DEFAULT_AUTOMATION_TIMEOUTS,
+  judgeWindowId?: number
 ): Promise<void> {
-  // Capture the active window up front so the judge opens in the user's
-  // original window (agents run in their own transient popup windows).
-  const judgeWindowId = await getActiveWindowId();
+  // Use the provided windowId if available (from the side panel request),
+  // otherwise fall back to getting the currently active window.
+  const windowId = judgeWindowId ?? await getActiveWindowId();
 
   const state: ActiveRunState = {
     sessionId: session.id,
@@ -73,7 +74,7 @@ export async function runCouncil(
     agentWindowIds: new Map(),
     currentAgentWindowId: null,
     judgeTabId: null,
-    judgeWindowId
+    judgeWindowId: windowId
   };
 
   const update = (patch: Partial<ActiveCouncilSession>): ActiveCouncilSession => {
@@ -658,16 +659,17 @@ async function openJudgeTabAndListenForReady(
   if (targetWindowId != null) {
     const { tabId: matchingTabId, matches } = await findMatchingTabInWindow(targetWindowId, appKey);
     if (matches && matchingTabId != null) {
+      // Reuse the existing matching tab and focus it so user sees the judge
       await browser.tabs.update(matchingTabId, { url: newChatUrl, active: true });
       return openTabAndListenForReadyOnExistingTab(matchingTabId, newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, true);
     }
 
-    // No matching tab; create a new tab in the captured window
-    return openTabAndListenForReadyInWindow(targetWindowId, newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, false);
+    // No matching tab; create a new tab in the captured window and focus it
+    return openTabAndListenForReadyInWindow(targetWindowId, newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, true);
   }
 
   // Fallback: open in a new window (previous behavior)
-  return openTabAndListenForReady(newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, false);
+  return openTabAndListenForReady(newChatUrl, tabLoadTimeoutMs, contentReadyTimeoutMs, appKey, true);
 }
 
 function openTabAndListenForReadyOnExistingTab(
