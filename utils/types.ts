@@ -53,10 +53,10 @@ export interface SupportedApp {
   newChatUrl: string;
 }
 
-// The type of council flow the user has selected. "agentJudge" is the
-// existing agents-answer-then-judge-decides flow. "relay" is a UI-only
-// placeholder for now — no run logic is wired up yet.
+// "agentJudge" — parallel agents then judge. "relay" — sequential critique chain then judge.
 export type CouncilType = "agentJudge" | "relay";
+
+export type RelayRole = "author" | "reviewer";
 
 export interface CouncilPreferences {
   councilType: CouncilType;
@@ -72,12 +72,17 @@ export interface AgentResult {
   startedAt: number;
   completedAt: number | null;
   chatUrl?: string;
+  relayRole?: RelayRole;
+  inputDraft?: string;
+  critiqueText?: string;
+  revisedAnswerText?: string;
 }
 
 export interface ActiveCouncilSession {
   id: string;
   timestamp: number;
   prompt: string;
+  councilType: CouncilType;
   agentsUsed: AppKey[];
   judgeApp: AppKey;
   judgeChatUrl: string | null;
@@ -87,6 +92,7 @@ export interface ActiveCouncilSession {
   status: SessionStatus;
   durationMs: number;
   judgePrompt?: string;
+  relayFinalDraft?: string;
   errorMessage?: string;
 }
 
@@ -109,7 +115,27 @@ export interface RunCouncilRequest {
   prompt: string;
   agentKeys: AppKey[];
   judgeKey: AppKey;
+  councilType?: CouncilType;
   windowId?: number;
+}
+
+export function toStoredSession(session: ActiveCouncilSession): StoredCouncilSession {
+  return {
+    timestamp: session.timestamp,
+    prompt: session.prompt,
+    councilType: session.councilType,
+    agentsUsed: session.agentsUsed,
+    judgeApp: session.judgeApp,
+    judgeChatUrl: session.judgeChatUrl,
+    agentResults: session.agentResults,
+    judgeStep: session.judgeStep,
+    agentTabUrl: session.agentTabUrl,
+    status: session.status,
+    durationMs: session.durationMs,
+    judgePrompt: session.judgePrompt,
+    relayFinalDraft: session.relayFinalDraft,
+    errorMessage: session.errorMessage
+  };
 }
 
 export type PanelRequest =

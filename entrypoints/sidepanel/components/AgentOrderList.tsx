@@ -15,6 +15,7 @@ interface AgentOrderListProps {
   agents: SupportedAppWithRoles[]; // All available agents from appRegistry
   selectedKeys: AppKey[]; // Ordered array of selected agent keys
   judgeKey: AppKey; // Current judge key (excluded from selection)
+  showRelayRoles?: boolean;
   onToggle: (key: AppKey) => void; // Callback when agent checkbox toggled
   onReorder: (sourceKey: AppKey, targetKey: AppKey) => void; // Callback when agent dragged to new position
 }
@@ -24,10 +25,16 @@ interface AgentOrderListProps {
  * Displays selected agents first in their stored order, followed by unselected agents.
  * Manages drag-and-drop state and provides drag event handlers to child AgentItem components.
  */
+function relayRoleLabel(orderIndex: number | null): string | null {
+  if (orderIndex === null) return null;
+  return orderIndex === 1 ? "Author" : "Reviewer";
+}
+
 export function AgentOrderList({
   agents,
   selectedKeys,
   judgeKey,
+  showRelayRoles = false,
   onToggle,
   onReorder
 }: AgentOrderListProps) {
@@ -116,6 +123,7 @@ export function AgentOrderList({
             agent={agent}
             isSelected={isSelected}
             orderIndex={orderIndex}
+            roleLabel={showRelayRoles ? relayRoleLabel(orderIndex) : null}
             isJudge={false}
             isDragged={isDragged}
             isDropTarget={isDropTarget}

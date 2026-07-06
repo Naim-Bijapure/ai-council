@@ -1,6 +1,7 @@
 import type { SupportedAppWithRoles } from "@/utils/appRegistry";
 import type { AppKey } from "@/utils/types";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DragHandle } from "./DragHandle";
 import { OrderBadge } from "./OrderBadge";
@@ -17,6 +18,7 @@ interface AgentItemProps {
   agent: SupportedAppWithRoles;
   isSelected: boolean;
   orderIndex: number | null;
+  roleLabel?: string | null;
   isJudge: boolean;
   isDragged: boolean;
   isDropTarget: boolean;
@@ -31,6 +33,7 @@ export function AgentItem({
   agent,
   isSelected,
   orderIndex,
+  roleLabel,
   isJudge,
   isDragged,
   isDropTarget,
@@ -58,9 +61,16 @@ export function AgentItem({
         </span>
       </label>
 
-      {isSelected && orderIndex !== null && (
-        <OrderBadge index={orderIndex} />
-      )}
+      {isSelected && orderIndex !== null ? (
+        <div className="flex items-center gap-1.5">
+          {roleLabel ? (
+            <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+              {roleLabel}
+            </Badge>
+          ) : null}
+          <OrderBadge index={orderIndex} />
+        </div>
+      ) : null}
 
       <DragHandle {...dragHandleProps} />
     </div>

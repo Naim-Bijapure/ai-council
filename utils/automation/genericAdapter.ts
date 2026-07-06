@@ -1,18 +1,27 @@
 import {
   checkBlockedState,
   clickElement,
+  countRoleMessages,
+  expandChatGptLongPromptPreview,
   extractTextFromElement,
+  getInputText,
+  getLatestResponseContainer,
+  getMonitorSelectors,
   getResponseContainer,
+  hasChatGptLongPromptPreview,
   hasResponseStarted,
   isDisabled,
+  isGenerationActive,
+  isGenerationResumed,
   queryFirstSelector,
   scrollResponseToBottom,
   setInputText,
   sleep,
   waitForInput,
-  waitForSendButtonEnabled
+  waitForSendButtonEnabled,
+  type GenerationActivityState
 } from "./adapterHelpers";
-import type { AdapterResult, SendConfirmationResult, SelectorGroup } from "./types";
+import type { AdapterResult, AutomationTimeouts, SendConfirmationResult, SelectorGroup } from "./types";
 import { DEFAULT_AUTOMATION_TIMEOUTS } from "./types";
 import type { AppKey } from "../types";
 
@@ -32,7 +41,10 @@ const STOP_BUTTON_POLL_INTERVAL_MS = 500;
 // more time to render their input than the old pre-warmed tabs did.
 const INPUT_READY_WAIT_MS = 30_000;
 const DOM_STABILIZATION_QUIET_MS = 6_000;
+const DOM_STABILIZATION_QUIET_MS_LONG = 10_000;
 const MIN_RESPONSE_LENGTH = 10;
+const POST_COMPLETION_VERIFY_MS = 2_000;
+const RECENT_TEXT_ACTIVITY_MS = 3_000;
 const SEND_CONFIRMATION_TIMEOUT_MS = 30_000;
 const SEND_CONFIRMATION_POLL_MS = 300;
 // Grace period before falling back to text stabilization when no stop button has been seen.
@@ -79,27 +91,98 @@ function log(appKey: AppKey, stage: string, detail?: unknown): void {
   console.log(`[${appKey} Adapter] ${stage}`, detail ?? "");
 }
 
-/**
- * Check the 4 submission signals once and return true if any is detected.
- */
-function checkSubmissionSignals(selectors: SelectorGroup, inputElement: HTMLElement): boolean {
-  // 1. Stop/completion button visible
-  if (selectors.completion.length > 0) {
-    const stopButton = queryFirstSelector(selectors.completion);
-    if (stopButton) return true;
-  }
-  // 2. Response container has started populating
-  const responseContainer = getResponseContainer(selectors.response);
-  if (hasResponseStarted(responseContainer)) return true;
-  // 3. Send button became disabled or disappeared
+interface SubmissionSnapshot {
+  inputTextBeforeSend: string;
+  userMessageCountBeforeSend: number;
+  sendButtonWasEnabled: boolean;
+  urlBeforeSend: string;
+}
+
+function captureSubmissionSnapshot(
+  selectors: SelectorGroup,
+  inputElement: HTMLElement
+): SubmissionSnapshot {
   const sendButton = queryFirstSelector(selectors.send) as HTMLElement | null;
-  if (!sendButton || isDisabled(sendButton)) return true;
-  // 4. Input was cleared
-  const remainingText =
-    inputElement instanceof HTMLTextAreaElement || inputElement instanceof HTMLInputElement
-      ? inputElement.value
-      : (inputElement.innerText ?? inputElement.textContent ?? "");
-  if (!remainingText.trim()) return true;
+  return {
+    inputTextBeforeSend: getInputText(inputElement),
+    userMessageCountBeforeSend: countRoleMessages("user"),
+    sendButtonWasEnabled: !!(sendButton && !isDisabled(sendButton)),
+    urlBeforeSend: window.location.href
+  };
+}
+
+function normalizePromptLength(text: string): number {
+  return text.replace(/\s+/g, "").length;
+}
+
+async function ensurePromptInjected(
+  appKey: AppKey,
+  inputElement: HTMLElement,
+  prompt: string
+): Promise<boolean> {
+  let injectedLength = normalizePromptLength(getInputText(inputElement));
+  const expectedLength = normalizePromptLength(prompt);
+  if (expectedLength > 0 && injectedLength >= expectedLength * 0.85) {
+    return true;
+  }
+
+  if (appKey === "chatgpt" && hasChatGptLongPromptPreview()) {
+    await expandChatGptLongPromptPreview();
+    await sleep(300);
+    injectedLength = normalizePromptLength(getInputText(inputElement));
+    if (expectedLength > 0 && injectedLength >= expectedLength * 0.85) {
+      return true;
+    }
+  }
+
+  if (expectedLength > 0 && injectedLength < expectedLength * 0.5) {
+    await setInputText(inputElement, prompt, { appKey });
+    await sleep(200);
+    injectedLength = normalizePromptLength(getInputText(inputElement));
+  }
+
+  return expectedLength === 0 || injectedLength >= expectedLength * 0.5;
+}
+
+/**
+ * Check whether a submission actually started. Requires positive evidence —
+ * a missing/disabled send button alone is NOT treated as success (ChatGPT's
+ * long-prompt attachment preview breaks that heuristic).
+ */
+function checkSubmissionSignals(
+  selectors: SelectorGroup,
+  inputElement: HTMLElement,
+  snapshot: SubmissionSnapshot
+): boolean {
+  if (selectors.completion.length > 0 && queryFirstSelector(selectors.completion)) {
+    return true;
+  }
+
+  if (countRoleMessages("user") > snapshot.userMessageCountBeforeSend) {
+    return true;
+  }
+
+  const remainingText = getInputText(inputElement);
+  if (snapshot.inputTextBeforeSend.trim() && !remainingText.trim()) {
+    return true;
+  }
+
+  if (snapshot.sendButtonWasEnabled) {
+    const sendButton = queryFirstSelector(selectors.send) as HTMLElement | null;
+    if (!sendButton || isDisabled(sendButton)) {
+      return true;
+    }
+  }
+
+  const responseContainer = getLatestResponseContainer(selectors.response);
+  if (
+    responseContainer &&
+    countRoleMessages("assistant") > 0 &&
+    hasResponseStarted(responseContainer)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -124,11 +207,12 @@ function checkSubmissionSignals(selectors: SelectorGroup, inputElement: HTMLElem
 async function didSubmissionStart(
   selectors: SelectorGroup,
   inputElement: HTMLElement,
+  snapshot: SubmissionSnapshot,
   pollMs: number = 5_000,
   intervalMs: number = 200
 ): Promise<boolean> {
   // Fast path — check immediately before setting up observers
-  if (checkSubmissionSignals(selectors, inputElement)) return true;
+  if (checkSubmissionSignals(selectors, inputElement, snapshot)) return true;
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -143,7 +227,7 @@ async function didSubmissionStart(
     };
 
     const check = (): void => {
-      if (checkSubmissionSignals(selectors, inputElement)) {
+      if (checkSubmissionSignals(selectors, inputElement, snapshot)) {
         finish(true);
       }
     };
@@ -215,22 +299,18 @@ async function runAgentInner(
   // Step 3: Inject text
   log(appKey, "Injecting prompt text...");
   try {
-    await setInputText(inputElement, prompt);
+    await setInputText(inputElement, prompt, { appKey });
   } catch (error) {
     log(appKey, "FAILED: injection threw error", error instanceof Error ? error.message : error);
     return { success: false, errorReason: "dom_error", completedAt: Date.now() };
   }
 
   await sleep(100);
-  const injectedText =
-    inputElement instanceof HTMLTextAreaElement
-      ? inputElement.value
-      : (inputElement.textContent ?? "");
-  if (!injectedText.trim()) {
-    log(appKey, "FAILED: text not injected (empty after set)");
+  if (!(await ensurePromptInjected(appKey, inputElement, prompt))) {
+    log(appKey, "FAILED: text not injected (empty or truncated after set)");
     return { success: false, errorReason: "dom_error", completedAt: Date.now() };
   }
-  log(appKey, "Text injected", { contentLength: injectedText.length });
+  log(appKey, "Text injected", { contentLength: getInputText(inputElement).length });
 
   // Step 4: Wait for send button
   log(appKey, "Waiting for send button to enable...");
@@ -238,6 +318,7 @@ async function runAgentInner(
     selectors.send,
     DEFAULT_AUTOMATION_TIMEOUTS.sendButtonEnableMs
   );
+  const submissionSnapshot = captureSubmissionSnapshot(selectors, inputElement);
 
   if (sendButton && !isDisabled(sendButton)) {
     // Step 5: Click send
@@ -246,7 +327,7 @@ async function runAgentInner(
     log(appKey, "Send button clicked");
 
     // Check if the click actually submitted — poll for stop button / response start.
-    const submitted = await didSubmissionStart(selectors, inputElement);
+    const submitted = await didSubmissionStart(selectors, inputElement, submissionSnapshot);
     if (!submitted) {
       if (isTextInput(inputElement)) {
         log(appKey, "Send button click didn't submit — trying Enter-key backup...");
@@ -278,7 +359,7 @@ async function runAgentInner(
 
   // Step 6: Wait for response
   log(appKey, "Waiting for response completion...");
-  const responseResult = await waitForResponseCompletion(appKey, selectors, DEFAULT_AUTOMATION_TIMEOUTS.responseWaitMs);
+  const responseResult = await waitForResponseCompletion(appKey, selectors, DEFAULT_AUTOMATION_TIMEOUTS);
   log(appKey, "Response wait finished", { timedOut: responseResult.timedOut });
 
   // Step 7: Extract response
@@ -345,14 +426,18 @@ async function runJudgeInner(
   // Step 3: Inject text
   log(appKey, "Injecting judge prompt...");
   try {
-    await setInputText(inputElement, prompt);
+    await setInputText(inputElement, prompt, { appKey });
   } catch (error) {
     log(appKey, "FAILED: injection threw error", error instanceof Error ? error.message : error);
     return { sent: false, errorReason: "dom_error" };
   }
 
   await sleep(100);
-  log(appKey, "Text injected", { length: prompt.length });
+  if (!(await ensurePromptInjected(appKey, inputElement, prompt))) {
+    log(appKey, "FAILED: judge prompt not injected (empty or truncated after set)");
+    return { sent: false, errorReason: "dom_error" };
+  }
+  log(appKey, "Text injected", { length: getInputText(inputElement).length });
 
   // Step 4: Wait for send button
   log(appKey, "Waiting for send button to enable...");
@@ -360,16 +445,14 @@ async function runJudgeInner(
     selectors.send,
     DEFAULT_AUTOMATION_TIMEOUTS.sendButtonEnableMs
   );
-
-  const urlBeforeSend = window.location.href;
-  const hadResponseContainer = getResponseContainer(selectors.response) !== null;
+  const submissionSnapshot = captureSubmissionSnapshot(selectors, inputElement);
 
   if (sendButton && !isDisabled(sendButton)) {
     log(appKey, "Clicking send button...");
     clickElement(sendButton);
     log(appKey, "Send button clicked");
 
-    const submitted = await didSubmissionStart(selectors, inputElement);
+    const submitted = await didSubmissionStart(selectors, inputElement, submissionSnapshot);
     if (!submitted) {
       if (isTextInput(inputElement)) {
         log(appKey, "Send button click didn't submit — trying Enter-key backup...");
@@ -391,7 +474,7 @@ async function runJudgeInner(
 
   // Step 6: Confirm message sent
   log(appKey, "Confirming message sent...");
-  const confirmed = await confirmMessageSent(appKey, selectors, urlBeforeSend, hadResponseContainer, inputElement);
+  const confirmed = await confirmMessageSent(appKey, selectors, submissionSnapshot, inputElement);
   log(appKey, "Send confirmation result", confirmed);
   return confirmed;
 }
@@ -415,49 +498,99 @@ interface ResponseWaitResult {
 async function waitForResponseCompletion(
   appKey: AppKey,
   selectors: SelectorGroup,
-  timeoutMs: number
+  timeouts: Pick<AutomationTimeouts, "responseIdleMs" | "maxResponseWaitMs">
 ): Promise<ResponseWaitResult> {
   return new Promise<ResponseWaitResult>((resolve) => {
     let stopButtonWasVisible = false;
-    // Timestamp of when the stop button most recently disappeared after
-    // having been visible. Reset to null whenever it reappears. Used to
-    // debounce the "thinking → answering" flicker some reasoning models
-    // (Qwen) exhibit, where the stop button briefly vanishes between phases.
     let stopButtonGoneSince: number | null = null;
     let lastText = "";
     const monitorStartTime = Date.now();
     let lastTextChangeTime = monitorStartTime;
+    let lastActivityTime = monitorStartTime;
     let textEverObserved = false;
     let settled = false;
+    let verifyTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingCompletionReason: string | null = null;
+    const activityState: GenerationActivityState = { lastTextChangeTime };
+
+    function generationContext(stopButtonCurrentlyVisible: boolean): Parameters<typeof isGenerationActive>[1] {
+      return {
+        stopButtonWasVisible,
+        stopButtonCurrentlyVisible,
+        activityState,
+        recentActivityMs: RECENT_TEXT_ACTIVITY_MS
+      };
+    }
 
     function cleanup() {
       observer.disconnect();
-      clearTimeout(timeoutHandle);
       clearInterval(pollHandle);
+      if (verifyTimer) clearTimeout(verifyTimer);
     }
 
     function finish(timedOut: boolean, reason: string) {
       if (settled) return;
       settled = true;
+      pendingCompletionReason = null;
       cleanup();
       if (timedOut) {
-        log(appKey, "  Response wait timed out", { stopButtonWasVisible });
+        log(appKey, `  Response wait timed out: ${reason}`, { stopButtonWasVisible });
       } else {
         log(appKey, `  Completion detected: ${reason}`, { textLength: lastText.length });
       }
       resolve({ timedOut });
     }
 
+    function scheduleCompletion(reason: string) {
+      if (settled || verifyTimer || pendingCompletionReason) return;
+      pendingCompletionReason = reason;
+      verifyTimer = setTimeout(() => {
+        verifyTimer = null;
+        const reasonToFinish = pendingCompletionReason;
+        pendingCompletionReason = null;
+        if (settled) return;
+        if (isGenerationResumed(selectors, activityState)) {
+          log(appKey, "  Post-verify: generation resumed, continuing wait");
+          return;
+        }
+        finish(false, reasonToFinish ?? reason);
+      }, POST_COMPLETION_VERIFY_MS);
+    }
+
+    function touchActivity() {
+      const now = Date.now();
+      lastActivityTime = now;
+      activityState.lastTextChangeTime = now;
+    }
+
+    function checkTimeouts(stopButtonCurrentlyVisible: boolean): string | null {
+      if (Date.now() - monitorStartTime >= timeouts.maxResponseWaitMs) {
+        return "absolute timeout";
+      }
+      if (
+        !isGenerationActive(selectors, generationContext(stopButtonCurrentlyVisible)) &&
+        Date.now() - lastActivityTime >= timeouts.responseIdleMs
+      ) {
+        return "idle timeout";
+      }
+      return null;
+    }
+
     function checkCompletion(): string | null {
-      // Signal 1: Stop button (authoritative when available)
-      // Checked every iteration — the stop button may appear late (e.g. after
-      // ChatGPT finishes a web search before generating the response).
       const stopButton = queryFirstSelector(selectors.completion);
+      const stopButtonCurrentlyVisible = stopButton !== null;
+
+      if (isGenerationActive(selectors, generationContext(stopButtonCurrentlyVisible))) {
+        touchActivity();
+      }
+
+      const timeoutReason = checkTimeouts(stopButtonCurrentlyVisible);
+      if (timeoutReason) return `__timeout__:${timeoutReason}`;
+
       if (stopButton) {
         stopButtonWasVisible = true;
-        // Button is back — this was a transient flicker (e.g. Qwen's
-        // thinking → answering gap), not real completion. Reset the timer.
         stopButtonGoneSince = null;
+        touchActivity();
       } else if (stopButtonWasVisible) {
         if (stopButtonGoneSince === null) {
           stopButtonGoneSince = Date.now();
@@ -466,20 +599,20 @@ async function waitForResponseCompletion(
         if (goneMs >= STOP_BUTTON_DISAPPEAR_DEBOUNCE_MS) {
           return "stop button disappeared";
         }
-        // Still within the debounce window — the button may reappear for the
-        // answer phase (Qwen-style thinking → answering gap). Don't declare
-        // completion yet; wait for either the debounce to elapse or the
-        // button to come back (handled in the `if (stopButton)` branch above).
       }
 
-      // Signal 2: Text content stabilization (fallback)
-      // Only when stop button is NOT currently visible AND the grace period has elapsed.
-      // The grace period prevents transient loading text ("Searching the web", "Thinking…")
-      // from triggering completion before the stop button has had time to appear.
       const elapsedMs = Date.now() - monitorStartTime;
       const graceElapsed = stopButtonWasVisible || elapsedMs >= STOP_BUTTON_GRACE_MS;
-      if (!stopButton && graceElapsed) {
-        const container = getResponseContainer(selectors.response);
+      const stabilizationMs = stopButtonWasVisible
+        ? DOM_STABILIZATION_QUIET_MS
+        : DOM_STABILIZATION_QUIET_MS_LONG;
+
+      if (
+        !stopButton &&
+        graceElapsed &&
+        !isGenerationActive(selectors, generationContext(false))
+      ) {
+        const container = getLatestResponseContainer(getMonitorSelectors(selectors));
         if (container && hasResponseStarted(container)) {
           const text = (container.textContent ?? "").trim();
           if (text.length >= MIN_RESPONSE_LENGTH) {
@@ -487,9 +620,10 @@ async function waitForResponseCompletion(
               lastText = text;
               lastTextChangeTime = Date.now();
               textEverObserved = true;
+              touchActivity();
             } else if (textEverObserved) {
               const quietTime = Date.now() - lastTextChangeTime;
-              if (quietTime >= DOM_STABILIZATION_QUIET_MS) {
+              if (quietTime >= stabilizationMs) {
                 return `text stabilized (${quietTime}ms quiet)`;
               }
             }
@@ -499,50 +633,55 @@ async function waitForResponseCompletion(
       return null;
     }
 
-    // Primary signal: MutationObserver (fires even in background tabs)
-    const observer = new MutationObserver(() => {
+    function handleTick() {
       if (settled) return;
+      if (pendingCompletionReason && verifyTimer) return;
       const reason = checkCompletion();
-      if (reason) finish(false, reason);
+      if (!reason) return;
+      if (reason.startsWith("__timeout__:")) {
+        finish(true, reason.slice("__timeout__:".length));
+        return;
+      }
+      scheduleCompletion(reason);
+    }
+
+    const observer = new MutationObserver(() => {
+      handleTick();
     });
 
     observer.observe(document.body, {
       childList: true,
       subtree: true,
-      characterData: true,
+      characterData: true
     });
 
-    // Hard timeout safety net (may be delayed in background tabs — that's OK)
-    const timeoutHandle = setTimeout(() => finish(true, "timeout"), timeoutMs);
-
-    // Backup polling loop (throttled to ~1s in background tabs by Chrome,
-    // but that's sufficient for the 6s text-stabilization quiet period).
-    // Essential for apps without a stop button where no mutations fire
-    // during the streaming quiet period.
-    const pollHandle = setInterval(() => {
-      if (settled) return;
-      const reason = checkCompletion();
-      if (reason) finish(false, reason);
-    }, STOP_BUTTON_POLL_INTERVAL_MS);
+    const pollHandle = setInterval(handleTick, STOP_BUTTON_POLL_INTERVAL_MS);
   });
 }
 
 async function extractLatestResponse(appKey: AppKey, selectors: SelectorGroup): Promise<string> {
-  const containers = document.querySelectorAll(selectors.response.join(", "));
-  log(appKey, `extract: Found ${containers.length} response container(s)`, {
-    selectors: selectors.response.join(", ")
+  const monitorSelectors = getMonitorSelectors(selectors);
+  let target = getLatestResponseContainer(monitorSelectors);
+
+  if (!target) {
+    target = getLatestResponseContainer(selectors.response);
+  }
+
+  log(appKey, "extract: Using latest response container", {
+    selectors: monitorSelectors.join(", ")
   });
 
-  if (containers.length === 0) return "";
+  if (!target) return "";
 
-  const lastContainer = containers[containers.length - 1];
-  scrollResponseToBottom(lastContainer);
+  scrollResponseToBottom(target);
 
   await sleep(500);
 
-  const refreshed = document.querySelectorAll(selectors.response.join(", "));
-  const target = refreshed[refreshed.length - 1] ?? lastContainer;
-  const extracted = extractTextFromElement(target);
+  const refreshed =
+    getLatestResponseContainer(monitorSelectors) ??
+    getLatestResponseContainer(selectors.response) ??
+    target;
+  const extracted = extractTextFromElement(refreshed, selectors.responseExclude);
   log(appKey, `extract: Extracted ${extracted.length} chars`, {
     htmlLength: target.innerHTML.length,
     textPreview: extracted.slice(0, 200)
@@ -553,46 +692,24 @@ async function extractLatestResponse(appKey: AppKey, selectors: SelectorGroup): 
 async function confirmMessageSent(
   appKey: AppKey,
   selectors: SelectorGroup,
-  urlBeforeSend: string,
-  hadResponseContainer: boolean,
+  snapshot: SubmissionSnapshot,
   inputElement?: HTMLElement
 ): Promise<SendConfirmationResult> {
   const deadline = Date.now() + SEND_CONFIRMATION_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    // Early exit on any standard submit-accepted signal (input cleared, stop button,
-    // send disabled, or response text started). This is critical for large/complex
-    // judge prompts where the model may take >15s before producing visible answer
-    // text or performing a client-side URL change. We still accept the legacy signals.
     try {
-      if (inputElement && checkSubmissionSignals(selectors, inputElement)) {
-        log(appKey, "  Confirmed: submission signal (stop/send/input/cleared/response)");
+      if (inputElement && checkSubmissionSignals(selectors, inputElement, snapshot)) {
+        log(appKey, "  Confirmed: submission signal (user message/stop/input/send)");
         return { sent: true };
       }
     } catch {
       // Non-fatal; fall through to other signals.
     }
 
-    if (window.location.href !== urlBeforeSend) {
+    if (window.location.href !== snapshot.urlBeforeSend) {
       log(appKey, "  Confirmed: URL changed");
       return { sent: true };
-    }
-
-    if (!hadResponseContainer) {
-      const responseContainer = getResponseContainer(selectors.response);
-      if (responseContainer && (responseContainer.textContent ?? "").trim().length > 0) {
-        log(appKey, "  Confirmed: response container appeared with content");
-        return { sent: true };
-      }
-    } else {
-      const containers = document.querySelectorAll(selectors.response.join(", "));
-      if (containers.length > 0) {
-        const lastContainer = containers[containers.length - 1];
-        if ((lastContainer.textContent ?? "").trim().length > 0) {
-          log(appKey, "  Confirmed: new response content detected");
-          return { sent: true };
-        }
-      }
     }
 
     await sleep(SEND_CONFIRMATION_POLL_MS);

@@ -61,7 +61,14 @@ export function validateSelectorConfig(config: SelectorConfig, appKey: AppKey): 
     validateSelectorArray(config.selectors[group] as string[], appKey, group);
   }
 
-  for (const optionalGroup of ["completion", "blocked", "loginError"] as const) {
+  for (const optionalGroup of [
+    "completion",
+    "generating",
+    "responseExclude",
+    "responseMonitor",
+    "blocked",
+    "loginError"
+  ] as const) {
     const value = config.selectors[optionalGroup];
     if (Array.isArray(value)) {
       validateSelectorArray(value, appKey, optionalGroup);
@@ -114,6 +121,9 @@ export function getEmptySelectorGroup(): SelectorGroup {
     send: [],
     response: [],
     completion: [],
+    generating: [],
+    responseExclude: [],
+    responseMonitor: [],
     blocked: [],
     loginError: []
   };

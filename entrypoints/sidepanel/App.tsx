@@ -12,8 +12,7 @@ import {
   DEFAULT_AGENT_KEYS,
   DEFAULT_JUDGE_KEY,
   getAppsForRole,
-  SUPPORTED_APPS,
-  type SupportedAppWithRoles
+  SUPPORTED_APPS
 } from "../../utils/appRegistry";
 import {
   MAX_USER_PROMPT_LENGTH,
@@ -122,7 +121,7 @@ export default function App() {
   const [expandedAgent, setExpandedAgent] = useState<AppKey | null>(null);
 
   const activeSession = snapshot.state === "active" ? snapshot.session : null;
-  const isRunning = activeSession?.status === "running";
+  const isRunning = activeSession?.status === "running" || activeSession?.status === "judge_handoff";
   const promptTooLong = prompt.length > MAX_USER_PROMPT_LENGTH;
   const canRun = prompt.trim().length > 0 && !promptTooLong && !isRunning && !loading && selectedAgents.length > 0;
 
@@ -243,6 +242,7 @@ export default function App() {
         prompt,
         agentKeys: selectedAgents,
         judgeKey,
+        councilType,
         windowId
       }
     });
@@ -336,13 +336,11 @@ export default function App() {
       <header className="flex items-end justify-between gap-3 border-b border-border bg-card px-4 pb-3 pt-4">
         <div>
           <h1 className="text-lg font-bold tracking-tight text-foreground">AI Council</h1>
-          {councilType === "agentJudge" ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {selectedAgents.length} agent{selectedAgents.length !== 1 ? "s" : ""} &rarr; {formatAppName(judgeKey)} judge
-            </p>
-          ) : (
-            <p className="mt-0.5 text-xs text-muted-foreground">Relay council — configuration coming soon</p>
-          )}
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {councilType === "agentJudge"
+              ? `${selectedAgents.length} agent${selectedAgents.length !== 1 ? "s" : ""} → ${formatAppName(judgeKey)} judge`
+              : `Relay: ${selectedAgents.length} step${selectedAgents.length !== 1 ? "s" : ""} → ${formatAppName(judgeKey)} judge`}
+          </p>
         </div>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ActiveTab)}>
           <TabsList aria-label="AI Council sections">
@@ -370,7 +368,7 @@ export default function App() {
               className="flex flex-col gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canRun && councilType === "agentJudge") {
+                if (canRun) {
                   void runCouncil();
                 }
               }}
@@ -406,53 +404,47 @@ export default function App() {
                 {promptTooLong ? <InlineError>Prompt is too long.</InlineError> : null}
               </div>
 
-              {councilType === "agentJudge" ? (
-                <>
-                  <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-                    <Label htmlFor="judge">Judge</Label>
-                    <Select value={judgeKey} onValueChange={(value) => setJudgeKey(value as AppKey)}>
-                      <SelectTrigger id="judge">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {judgeApps.map((app) => (
-                          <SelectItem key={app.key} value={app.key}>
-                            {app.displayName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+              <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
+                <Label htmlFor="judge">Judge</Label>
+                <Select value={judgeKey} onValueChange={(value) => setJudgeKey(value as AppKey)}>
+                  <SelectTrigger id="judge">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {judgeApps.map((app) => (
+                      <SelectItem key={app.key} value={app.key}>
+                        {app.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-                  <fieldset className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-                    <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-                      Agents
-                    </legend>
-                    <AgentOrderList
-                      agents={agentApps}
-                      selectedKeys={selectedAgents}
-                      judgeKey={judgeKey}
-                      onToggle={toggleAgent}
-                      onReorder={handleReorder}
-                    />
-                  </fieldset>
-
-                  {error ? <InlineError>{error}</InlineError> : null}
-                  {selectedAgents.length === 0 ? <InlineError>Select at least one agent.</InlineError> : null}
-
-                  <Button disabled={!canRun} type="submit">
-                    Run council
-                  </Button>
-                </>
-              ) : (
-                <RelayCouncilPlaceholder
+              <fieldset className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
+                <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                  {councilType === "relay" ? "Relay order" : "Agents"}
+                </legend>
+                {councilType === "relay" && selectedAgents.length === 1 ? (
+                  <p className="mb-1 text-xs text-muted-foreground">
+                    Two or more agents recommended — the first answers, each next step critiques and refines.
+                  </p>
+                ) : null}
+                <AgentOrderList
                   agents={agentApps}
                   selectedKeys={selectedAgents}
                   judgeKey={judgeKey}
+                  showRelayRoles={councilType === "relay"}
                   onToggle={toggleAgent}
                   onReorder={handleReorder}
                 />
-              )}
+              </fieldset>
+
+              {error ? <InlineError>{error}</InlineError> : null}
+              {selectedAgents.length === 0 ? <InlineError>Select at least one agent.</InlineError> : null}
+
+              <Button disabled={!canRun} type="submit">
+                {councilType === "relay" ? "Run relay" : "Run council"}
+              </Button>
 
               {SHOW_DEV_TOOLS && councilType === "agentJudge" ? (
               <>
@@ -552,55 +544,6 @@ function InlineError({ children }: { children: React.ReactNode }) {
   );
 }
 
-interface RelayCouncilPlaceholderProps {
-  agents: SupportedAppWithRoles[];
-  selectedKeys: AppKey[];
-  judgeKey: AppKey;
-  onToggle: (key: AppKey) => void;
-  onReorder: (sourceKey: AppKey, targetKey: AppKey) => void;
-}
-
-/**
- * UI-only placeholder for the Relay Council flow. Reuses the same agent
- * selection/ordering list as the Agent → Judge council (relay order matters
- * since each agent's output feeds the next), but the run logic is not wired
- * up yet — this is deliberately non-functional until the follow-up change.
- */
-function RelayCouncilPlaceholder({
-  agents,
-  selectedKeys,
-  judgeKey,
-  onToggle,
-  onReorder
-}: RelayCouncilPlaceholderProps) {
-  return (
-    <>
-      <fieldset className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-        <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-          Relay order
-        </legend>
-        <AgentOrderList
-          agents={agents}
-          selectedKeys={selectedKeys}
-          judgeKey={judgeKey}
-          onToggle={onToggle}
-          onReorder={onReorder}
-        />
-      </fieldset>
-
-      <div className="rounded-md border border-dashed border-border bg-card p-3 text-xs text-muted-foreground">
-        Relay council is coming soon — agents will pass their response to the
-        next agent in the chain. Selection and ordering are saved, but running
-        a relay isn't wired up yet.
-      </div>
-
-      <Button disabled type="button">
-        Run relay (coming soon)
-      </Button>
-    </>
-  );
-}
-
 interface SessionViewProps {
   expandedAgent: AppKey | null;
   isRunning: boolean;
@@ -610,6 +553,10 @@ interface SessionViewProps {
   onSwitchToJudge: () => Promise<void>;
   onToggleAgent: (key: AppKey | null) => void;
   session: NonNullable<CouncilSnapshot["session"]>;
+}
+
+function relayStepLabel(role: AgentResult["relayRole"]): string {
+  return role === "author" ? "Author" : role === "reviewer" ? "Reviewer" : "Agent";
 }
 
 function SessionView({
@@ -622,24 +569,46 @@ function SessionView({
   onToggleAgent,
   session
 }: SessionViewProps) {
+  const isRelay = session.councilType === "relay";
   const judgeStep = session.judgeStep ?? { status: "pending" as JudgeStepStatus, startedAt: null, completedAt: null };
   const isHandoff = session.status === "done" || session.status === "partial" || judgeStep.status === "sent";
   const completedAgents = session.agentResults.filter((r) => r.status === "done" || r.status === "error" || r.status === "timeout" || r.status === "skipped").length;
   const totalAgents = session.agentResults.length;
+  const activeAgent = session.agentResults.find((r) => r.status === "injecting" || r.status === "waiting");
+  const showFinalDraft = isRelay && session.relayFinalDraft && !isRunning && judgeStep.status !== "sent";
 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-lg border border-border bg-card p-3">
-        <span className="text-xs text-muted-foreground">Question</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">Question</span>
+          {isRelay ? <Badge variant="outline">Relay</Badge> : <Badge variant="outline">Council</Badge>}
+        </div>
         <p className="mt-1 text-foreground">{truncateText(session.prompt, 180)}</p>
       </div>
 
-      {session.status === "running" ? (
+      {session.status === "running" || session.status === "judge_handoff" ? (
         <div className="grid gap-2">
-          <Progress value={totalAgents > 0 ? (completedAgents / totalAgents) * 100 : 0} />
+          <Progress value={session.status === "judge_handoff" ? 100 : totalAgents > 0 ? (completedAgents / totalAgents) * 100 : 0} />
           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{completedAgents} / {totalAgents} agents complete</span>
+            <span>
+              {session.status === "judge_handoff"
+                ? `Relay complete — handing off to ${formatAppName(session.judgeApp)} judge`
+                : isRelay
+                  ? `Step ${Math.min(completedAgents + 1, totalAgents)} of ${totalAgents}`
+                  : `${completedAgents} / ${totalAgents} agents complete`}
+            </span>
+            {isRelay && activeAgent && session.status === "running" ? (
+              <span>{relayStepLabel(activeAgent.relayRole)}: {formatAppName(activeAgent.agentKey)}</span>
+            ) : null}
           </div>
+        </div>
+      ) : null}
+
+      {showFinalDraft ? (
+        <div className="rounded-lg border border-primary/40 bg-primary/10 p-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Final refined draft</span>
+          <p className="mt-2 text-sm text-foreground">{truncateText(session.relayFinalDraft ?? "", 240)}</p>
         </div>
       ) : null}
 
@@ -666,7 +635,16 @@ function SessionView({
               } : undefined}
             >
               <div className="flex items-center justify-between gap-2">
-                <strong className="text-sm text-foreground">{formatAppName(result.agentKey)} (Agent)</strong>
+                <div className="flex items-center gap-2">
+                  <strong className="text-sm text-foreground">{formatAppName(result.agentKey)}</strong>
+                  {isRelay && result.relayRole ? (
+                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                      {relayStepLabel(result.relayRole)}
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">(Agent)</span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   {isRunning && (result.status === "injecting" || result.status === "waiting") ? (
                     <Button
@@ -691,7 +669,19 @@ function SessionView({
                 </div>
               </div>
               {hasResult ? (
-                <p className="mt-2 text-xs text-muted-foreground">{truncateText(result.responseText, 150)}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {truncateText(
+                    isRelay && result.revisedAnswerText
+                      ? result.revisedAnswerText
+                      : result.responseText,
+                    150
+                  )}
+                </p>
+              ) : null}
+              {hasResult && isRelay && result.critiqueText ? (
+                <p className="mt-1 text-[11px] italic text-muted-foreground">
+                  Critique: {truncateText(result.critiqueText, 80)}
+                </p>
               ) : null}
               {result.status === "error" && result.errorReason ? (
                 <p className="mt-2 text-xs text-muted-foreground">{formatAgentStatus(result.status, result.errorReason)}</p>
@@ -837,7 +827,7 @@ function HistoryView({ history, onClearHistory }: HistoryViewProps) {
             >
               <span className="font-semibold text-foreground">{truncateText(session.prompt, 80)}</span>
               <small className="text-xs text-muted-foreground">
-                {formatTimestamp(session.timestamp)} · {formatSessionStatus(session.status)} · {session.agentsUsed.length} agent{session.agentsUsed.length !== 1 ? "s" : ""} · Judge: {formatAppName(session.judgeApp)}
+                {formatTimestamp(session.timestamp)} · {session.councilType === "relay" ? "Relay" : "Council"} · {formatSessionStatus(session.status)} · {session.agentsUsed.length} agent{session.agentsUsed.length !== 1 ? "s" : ""} · Judge: {formatAppName(session.judgeApp)}
               </small>
               {!session.judgeChatUrl ? <em className="text-xs text-muted-foreground">Judge URL unavailable</em> : null}
             </button>
@@ -884,11 +874,12 @@ function AgentResultPopup({ agentKey, result, onClose }: AgentResultPopupProps) 
   const duration = result.completedAt && result.startedAt
     ? ((result.completedAt - result.startedAt) / 1000).toFixed(1) + "s"
     : "—";
+  const hasRelaySections = Boolean(result.critiqueText || result.revisedAnswerText);
 
-  async function copyToClipboard(): Promise<void> {
-    if (!result?.responseText) return;
+  async function copyToClipboard(text: string): Promise<void> {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(result.responseText);
+      await navigator.clipboard.writeText(text);
     } catch {
       // ignore — clipboard may be unavailable
     }
@@ -898,7 +889,10 @@ function AgentResultPopup({ agentKey, result, onClose }: AgentResultPopupProps) 
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-w-[640px]">
         <DialogHeader>
-          <DialogTitle>{formatAppName(agentKey)} — Full Response</DialogTitle>
+          <DialogTitle>
+            {formatAppName(agentKey)}
+            {result.relayRole ? ` — ${relayStepLabel(result.relayRole)}` : " — Full Response"}
+          </DialogTitle>
         </DialogHeader>
         <div className="flex flex-wrap gap-3 border-b border-border bg-card px-4 py-3 text-xs text-muted-foreground">
           <span>Status: {formatAgentStatus(result.status, result.errorReason)}</span>
@@ -908,10 +902,31 @@ function AgentResultPopup({ agentKey, result, onClose }: AgentResultPopupProps) 
         {result.responseText ? (
           <>
             <div className="flex-1 overflow-y-auto px-4 py-4">
-              <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{result.responseText}</pre>
+              {hasRelaySections ? (
+                <div className="grid gap-4">
+                  {result.critiqueText ? (
+                    <section>
+                      <h3 className="mb-2 text-sm font-semibold text-foreground">Critique</h3>
+                      <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{result.critiqueText}</pre>
+                    </section>
+                  ) : null}
+                  {result.revisedAnswerText ? (
+                    <section>
+                      <h3 className="mb-2 text-sm font-semibold text-foreground">Revised answer</h3>
+                      <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{result.revisedAnswerText}</pre>
+                    </section>
+                  ) : null}
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{result.responseText}</pre>
+              )}
             </div>
             <DialogFooter>
-              <Button variant="secondary" onClick={() => void copyToClipboard()} type="button">
+              <Button
+                variant="secondary"
+                onClick={() => void copyToClipboard(result.revisedAnswerText ?? result.responseText)}
+                type="button"
+              >
                 Copy
               </Button>
               <Button onClick={onClose} type="button">

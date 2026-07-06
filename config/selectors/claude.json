@@ -1,6 +1,6 @@
 {
   "appKey": "claude",
-  "_comment": "Verified 2026-06-30 from claude.ai DOM inspection. Input is ProseMirror (tiptap) with data-testid='chat-input'. Send button is button[aria-label='Send message'] (only visible while text is typed). Response bubble is div.font-claude-response. Stop button selector pending — only visible during generation.",
+  "_comment": "Verified 2026-06-30 from claude.ai DOM inspection, updated 2026-07-06 for extended thinking. Input is ProseMirror (tiptap) with data-testid='chat-input'. Send button is button[aria-label='Send message'] (only visible while text is typed). Response bubble is div.font-claude-response. generating/responseExclude separate thinking blocks from final answer.",
   "selectors": {
     "input": [
       "div[data-testid='chat-input']",
@@ -16,9 +16,23 @@
       "div.font-claude-response",
       "div.standard-markdown"
     ],
+    "responseMonitor": [
+      "div.font-claude-response"
+    ],
+    "generating": [
+      "button[aria-label='Expand thinking']",
+      "div[class*='thinking']",
+      "div[data-testid*='thinking']"
+    ],
+    "responseExclude": [
+      "div[class*='thinking']",
+      "div[data-testid*='thinking']",
+      "button[aria-label='Expand thinking']"
+    ],
     "completion": [
       "button[aria-label='Stop']",
-      "button[aria-label='Stop generating']"
+      "button[aria-label='Stop generating']",
+      "button[aria-label='Stop response']"
     ],
     "blocked": [],
     "loginError": [

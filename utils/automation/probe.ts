@@ -2,14 +2,18 @@ import {
   checkBlockedState,
   clickElement,
   extractTextFromElement,
+  getLatestResponseContainer,
+  getMonitorSelectors,
   getResponseContainer,
   hasResponseStarted,
   isDisabled,
+  isGenerationActive,
   queryFirstSelector,
   setInputText,
   sleep,
   waitForInput,
-  waitForSendButtonEnabled
+  waitForSendButtonEnabled,
+  type GenerationActivityState
 } from "./adapterHelpers";
 import type { ProbeField, ProbeMode, ProbeResult, ProbeStep, ProbeStepStatus, SelectorGroup } from "./types";
 import { DEFAULT_AUTOMATION_TIMEOUTS } from "./types";
@@ -80,6 +84,7 @@ export async function runProbeStatic(appKey: AppKey, selectors: SelectorGroup): 
     steps.push(checkSelectorField("send", selectors.send, true));
     steps.push(checkSelectorField("response", selectors.response, false));
     steps.push(checkSelectorField("completion", selectors.completion, false));
+    steps.push(checkSelectorField("generating", selectors.generating, false));
     steps.push(checkSelectorField("blocked", selectors.blocked, false));
     steps.push(checkSelectorField("loginError", selectors.loginError, false));
     return { appKey, mode: "static", steps, durationMs: Date.now() - startTime };
@@ -89,6 +94,7 @@ export async function runProbeStatic(appKey: AppKey, selectors: SelectorGroup): 
   steps.push(checkSelectorField("send", selectors.send, true));
   steps.push(checkSelectorField("response", selectors.response, false));
   steps.push(checkSelectorField("completion", selectors.completion, false));
+  steps.push(checkSelectorField("generating", selectors.generating, false));
   steps.push(checkSelectorField("blocked", selectors.blocked, false));
   steps.push(checkSelectorField("loginError", selectors.loginError, false));
 
@@ -185,7 +191,7 @@ export async function runProbeLive(appKey: AppKey, selectors: SelectorGroup): Pr
 
   const responseResult = await waitForProbeResponseCompletion(selectors);
   if (responseResult.timedOut) {
-    steps.push(step("response_wait", "fail", "response timed out (30s)"));
+    steps.push(step("response_wait", "fail", `response timed out (${responseResult.durationMs}ms)`));
   } else {
     steps.push(step("response_wait", "pass", `response completed (${responseResult.durationMs}ms)`));
   }
@@ -291,17 +297,20 @@ interface ProbeResponseResult {
  */
 async function waitForProbeResponseCompletion(selectors: SelectorGroup): Promise<ProbeResponseResult> {
   const startTime = Date.now();
+  const idleMs = DEFAULT_AUTOMATION_TIMEOUTS.responseIdleMs;
 
   return new Promise<ProbeResponseResult>((resolve) => {
     let stopButtonWasVisible = false;
+    let stopButtonGoneSince: number | null = null;
     let lastText = "";
+    let lastActivityTime = Date.now();
     let lastTextChangeTime = Date.now();
     let textEverObserved = false;
     let settled = false;
+    const activityState: GenerationActivityState = { lastTextChangeTime };
 
     function cleanup() {
       observer.disconnect();
-      clearTimeout(timeoutHandle);
       clearInterval(pollHandle);
     }
 
@@ -312,18 +321,54 @@ async function waitForProbeResponseCompletion(selectors: SelectorGroup): Promise
       resolve({ timedOut, durationMs: Date.now() - startTime });
     }
 
-    function checkCompletion(): boolean {
-      // Signal 1: Stop button (authoritative)
+    function touchActivity() {
+      const now = Date.now();
+      lastActivityTime = now;
+      activityState.lastTextChangeTime = now;
+    }
+
+    function generationContext(stopButtonCurrentlyVisible: boolean) {
+      return {
+        stopButtonWasVisible,
+        stopButtonCurrentlyVisible,
+        activityState
+      };
+    }
+
+    function checkCompletion(): "complete" | "timeout" | null {
       const stopButton = queryFirstSelector(selectors.completion);
-      if (stopButton) {
-        stopButtonWasVisible = true;
-      } else if (stopButtonWasVisible) {
-        return true;
+      const stopButtonCurrentlyVisible = stopButton !== null;
+
+      if (isGenerationActive(selectors, generationContext(stopButtonCurrentlyVisible))) {
+        touchActivity();
       }
 
-      // Signal 2: Text stabilization (only when stop button not visible)
-      if (!stopButton) {
-        const currentContainer = getResponseContainer(selectors.response);
+      if (Date.now() - startTime >= DEFAULT_AUTOMATION_TIMEOUTS.maxResponseWaitMs) {
+        return "timeout";
+      }
+
+      if (
+        !isGenerationActive(selectors, generationContext(stopButtonCurrentlyVisible)) &&
+        Date.now() - lastActivityTime >= idleMs
+      ) {
+        return "timeout";
+      }
+
+      if (stopButton) {
+        stopButtonWasVisible = true;
+        stopButtonGoneSince = null;
+        touchActivity();
+      } else if (stopButtonWasVisible) {
+        if (stopButtonGoneSince === null) {
+          stopButtonGoneSince = Date.now();
+        }
+        if (Date.now() - stopButtonGoneSince >= 6_000) {
+          return "complete";
+        }
+      }
+
+      if (!stopButton && !isGenerationActive(selectors, generationContext(false))) {
+        const currentContainer = getLatestResponseContainer(getMonitorSelectors(selectors));
         if (currentContainer && hasResponseStarted(currentContainer)) {
           const text = (currentContainer.textContent ?? "").trim();
           if (text.length >= PROBE_MIN_RESPONSE_LENGTH) {
@@ -331,48 +376,47 @@ async function waitForProbeResponseCompletion(selectors: SelectorGroup): Promise
               lastText = text;
               lastTextChangeTime = Date.now();
               textEverObserved = true;
+              touchActivity();
             } else if (textEverObserved) {
               const quietTime = Date.now() - lastTextChangeTime;
               if (quietTime >= PROBE_DOM_STABILIZATION_MS) {
-                return true;
+                return "complete";
               }
             }
           }
         }
       }
-      return false;
+      return null;
     }
 
-    // Primary signal: MutationObserver (fires even in background tabs)
-    const observer = new MutationObserver(() => {
+    function handleTick() {
       if (settled) return;
-      if (checkCompletion()) finish(false);
+      const result = checkCompletion();
+      if (result === "complete") finish(false);
+      if (result === "timeout") finish(true);
+    }
+
+    const observer = new MutationObserver(() => {
+      handleTick();
     });
 
     observer.observe(document.body, {
       childList: true,
       subtree: true,
-      characterData: true,
+      characterData: true
     });
 
-    // Hard timeout
-    const timeoutHandle = setTimeout(() => finish(true), PROBE_RESPONSE_WAIT_MS);
-
-    // Backup polling loop (throttled in background tabs, but sufficient
-    // for the 6s text-stabilization quiet period)
-    const pollHandle = setInterval(() => {
-      if (settled) return;
-      if (checkCompletion()) finish(false);
-    }, PROBE_COMPLETION_POLL_MS);
+    const pollHandle = setInterval(handleTick, PROBE_COMPLETION_POLL_MS);
   });
 }
 
 async function extractProbeResponse(selectors: SelectorGroup): Promise<string> {
   if (selectors.response.length === 0) return "";
 
-  const containers = document.querySelectorAll(selectors.response.join(", "));
-  if (containers.length === 0) return "";
+  const target =
+    getLatestResponseContainer(getMonitorSelectors(selectors)) ??
+    getLatestResponseContainer(selectors.response);
+  if (!target) return "";
 
-  const target = containers[containers.length - 1];
-  return extractTextFromElement(target as HTMLElement);
+  return extractTextFromElement(target as HTMLElement, selectors.responseExclude);
 }

@@ -1,4 +1,79 @@
+import type { AppKey } from "../types";
 import type { SelectorGroup } from "./types";
+
+const CHATGPT_CHUNK_CHAR_THRESHOLD = 8_000;
+const CHATGPT_CHUNK_LINE_THRESHOLD = 120;
+const CHATGPT_CHUNK_LINES = 40;
+const CHATGPT_CHUNK_DELAY_MS = 5;
+
+export interface SetInputTextOptions {
+  appKey?: AppKey;
+}
+
+export function getInputText(element: HTMLElement): string {
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    return element.value;
+  }
+  return element.innerText ?? element.textContent ?? "";
+}
+
+export function countRoleMessages(role: "user" | "assistant"): number {
+  return document.querySelectorAll(`div[data-message-author-role='${role}']`).length;
+}
+
+function findClickableByText(pattern: RegExp): HTMLElement | null {
+  const candidates = document.querySelectorAll("button, a, [role='button']");
+  for (const node of candidates) {
+    const text = (node.textContent ?? "").trim();
+    if (pattern.test(text)) {
+      return node as HTMLElement;
+    }
+  }
+  return null;
+}
+
+export function hasChatGptLongPromptPreview(): boolean {
+  return findClickableByText(/show in text field/i) !== null;
+}
+
+export async function expandChatGptLongPromptPreview(): Promise<boolean> {
+  const control = findClickableByText(/show in text field/i);
+  if (!control) return false;
+  clickElement(control);
+  await sleep(200);
+  return true;
+}
+
+async function insertTextInChunks(element: HTMLElement, text: string): Promise<void> {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += CHATGPT_CHUNK_LINES) {
+    const chunk = lines.slice(i, i + CHATGPT_CHUNK_LINES).join("\n");
+    const suffix = i + CHATGPT_CHUNK_LINES < lines.length ? "\n" : "";
+    if (typeof document.execCommand === "function") {
+      document.execCommand("insertText", false, chunk + suffix);
+    }
+    if (CHATGPT_CHUNK_DELAY_MS > 0) {
+      await sleep(CHATGPT_CHUNK_DELAY_MS);
+    }
+  }
+}
+
+function shouldUseChunkedChatGptInsert(appKey: AppKey | undefined, text: string): boolean {
+  if (appKey !== "chatgpt") return false;
+  const lineCount = text.split("\n").length;
+  return text.length >= CHATGPT_CHUNK_CHAR_THRESHOLD || lineCount >= CHATGPT_CHUNK_LINE_THRESHOLD;
+}
+
+export interface GenerationActivityState {
+  lastTextChangeTime: number;
+}
+
+export interface GenerationCheckContext {
+  stopButtonWasVisible?: boolean;
+  stopButtonCurrentlyVisible?: boolean;
+  activityState?: GenerationActivityState;
+  recentActivityMs?: number;
+}
 import { DEFAULT_AUTOMATION_TIMEOUTS } from "./types";
 
 export function queryFirstSelector(selectors: string[]): Element | null {
@@ -72,7 +147,11 @@ function insertViaPaste(element: HTMLElement, text: string): void {
   }
 }
 
-export async function setInputText(element: HTMLElement, text: string): Promise<void> {
+export async function setInputText(
+  element: HTMLElement,
+  text: string,
+  options?: SetInputTextOptions
+): Promise<void> {
   // Normalize line endings so \r\n and \r become \n. This ensures consistent
   // handling of multi-line prompts coming from the side panel textarea.
   text = text.replace(/\r\n?/g, '\n');
@@ -93,6 +172,18 @@ export async function setInputText(element: HTMLElement, text: string): Promise<
     // delete handler so rich-editor models (Lexical/ProseMirror/Quill) are
     // cleared too (a plain `textContent = ""` desyncs them).
     clearContentEditable(element);
+
+    if (shouldUseChunkedChatGptInsert(options?.appKey, text)) {
+      await insertTextInChunks(element, text);
+      element.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText"
+        })
+      );
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
 
     // Fire insertion methods ONE AT A TIME, awaiting after each so that editors
     // which process input asynchronously (Lexical — Perplexity) have time to
@@ -419,13 +510,91 @@ export function getResponseContainer(responseSelectors: string[]): Element | nul
   return queryFirstSelector(responseSelectors);
 }
 
-export function extractTextFromElement(element: Element): string {
+export function getLatestResponseContainer(responseSelectors: string[]): Element | null {
+  if (responseSelectors.length === 0) return null;
+  const containers = document.querySelectorAll(responseSelectors.join(", "));
+  return containers.length > 0 ? containers[containers.length - 1] : null;
+}
+
+export function getMonitorSelectors(selectors: SelectorGroup): string[] {
+  return selectors.responseMonitor ?? selectors.response;
+}
+
+export function isGenerationActive(
+  selectors: SelectorGroup,
+  context: GenerationCheckContext = {}
+): boolean {
+  const {
+    stopButtonWasVisible = false,
+    activityState,
+    recentActivityMs = 3_000
+  } = context;
+  const stopButtonCurrentlyVisible =
+    context.stopButtonCurrentlyVisible ??
+    (selectors.completion.length > 0 && queryFirstSelector(selectors.completion) !== null);
+
+  if (stopButtonCurrentlyVisible) {
+    return true;
+  }
+
+  // Thinking/searching UI only blocks completion before the stop button has
+  // appeared. After generation ends the thinking accordion often stays in the
+  // DOM (Claude) — it must not keep the wait loop alive forever.
+  if (
+    !stopButtonWasVisible &&
+    selectors.generating?.length &&
+    queryFirstSelector(selectors.generating)
+  ) {
+    return true;
+  }
+
+  const monitor = getLatestResponseContainer(getMonitorSelectors(selectors));
+  const sendButton = queryFirstSelector(selectors.send) as HTMLElement | null;
+  if (sendButton && isDisabled(sendButton) && hasResponseStarted(monitor)) {
+    return true;
+  }
+
+  if (activityState && Date.now() - activityState.lastTextChangeTime < recentActivityMs) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Stricter check used after a tentative completion — only resume if generation restarted. */
+export function isGenerationResumed(
+  selectors: SelectorGroup,
+  activityState?: GenerationActivityState,
+  recentActivityMs = 1_000
+): boolean {
+  if (selectors.completion.length > 0 && queryFirstSelector(selectors.completion)) {
+    return true;
+  }
+
+  if (activityState && Date.now() - activityState.lastTextChangeTime < recentActivityMs) {
+    return true;
+  }
+
+  return false;
+}
+
+export function extractTextFromElement(element: Element, excludeSelectors?: string[]): string {
   const clone = element.cloneNode(true) as Element;
   clone
     .querySelectorAll(
       "button, [aria-label='Copy'], [aria-label='Stop generating'], [role='menu'], script, style, svg, .copy-button"
     )
     .forEach((el) => el.remove());
+
+  if (excludeSelectors) {
+    for (const selector of excludeSelectors) {
+      try {
+        clone.querySelectorAll(selector).forEach((el) => el.remove());
+      } catch {
+        // invalid selector — skip
+      }
+    }
+  }
 
   const blockSelector = "p, h1, h2, h3, h4, h5, h6, li, tr, div, br, hr";
   clone.querySelectorAll(blockSelector).forEach((el) => {

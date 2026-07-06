@@ -19,7 +19,7 @@ import {
   type PanelRequest,
   type PanelResponse,
   type RunCouncilRequest,
-  type StoredCouncilSession
+  toStoredSession
 } from "../utils/types";
 
 let activeSession: ActiveCouncilSession | null = null;
@@ -93,7 +93,7 @@ async function handlePanelMessage(message: PanelRequest): Promise<PanelResponse>
       return cancelCouncil();
 
     case "SKIP_AGENT": {
-      if (activeSession && activeSession.status === "running") {
+      if (activeSession && isActiveCouncilRun(activeSession.status)) {
         skipAgentFlag = message.agentKey;
       }
       return { ok: true, snapshot: getSnapshot() };
@@ -134,7 +134,7 @@ async function startCouncil(request: RunCouncilRequest): Promise<PanelResponse> 
     return { ok: false, error: validationError, snapshot: getSnapshot() };
   }
 
-  if (activeSession?.status === "running") {
+  if (activeSession && isActiveCouncilRun(activeSession.status)) {
     return { ok: false, error: "A council session is already running", snapshot: getSnapshot() };
   }
 
@@ -151,6 +151,7 @@ async function startCouncil(request: RunCouncilRequest): Promise<PanelResponse> 
     id: crypto.randomUUID(),
     timestamp: Date.now(),
     prompt: request.prompt.trim(),
+    councilType: request.councilType ?? "agentJudge",
     agentsUsed: agentKeys,
     judgeApp: judgeKey,
     judgeChatUrl: null,
@@ -213,8 +214,12 @@ function createPendingAgentResult(agentKey: AppKey): AgentResult {
   };
 }
 
+function isActiveCouncilRun(status: ActiveCouncilSession["status"]): boolean {
+  return status === "running" || status === "judge_handoff";
+}
+
 async function cancelCouncil(): Promise<PanelResponse> {
-  if (!activeSession || activeSession.status !== "running") {
+  if (!activeSession || !isActiveCouncilRun(activeSession.status)) {
     return { ok: true, snapshot: getSnapshot() };
   }
 
@@ -257,23 +262,8 @@ async function cancelCouncil(): Promise<PanelResponse> {
 async function saveCancelledSession(): Promise<void> {
   if (!activeSession) return;
 
-  const stored: StoredCouncilSession = {
-    timestamp: activeSession.timestamp,
-    prompt: activeSession.prompt,
-    agentsUsed: activeSession.agentsUsed,
-    judgeApp: activeSession.judgeApp,
-    judgeChatUrl: activeSession.judgeChatUrl,
-    agentResults: activeSession.agentResults,
-    judgeStep: activeSession.judgeStep,
-    agentTabUrl: activeSession.agentTabUrl,
-    status: activeSession.status,
-    durationMs: activeSession.durationMs,
-    judgePrompt: activeSession.judgePrompt,
-    errorMessage: activeSession.errorMessage
-  };
-
   const { saveSession } = await import("../utils/history");
-  await saveSession(stored);
+  await saveSession(toStoredSession(activeSession));
 }
 
 async function switchToJudge(): Promise<PanelResponse> {

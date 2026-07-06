@@ -9,6 +9,12 @@ export interface SelectorGroup {
   completion: string[];
   blocked?: string[];
   loginError?: string[];
+  /** Thinking/searching/tool-use indicators visible during generation */
+  generating?: string[];
+  /** Nodes stripped from extracted response text (e.g. thinking blocks) */
+  responseExclude?: string[];
+  /** Response containers used only for completion detection (defaults to response) */
+  responseMonitor?: string[];
 }
 
 export interface SelectorConfig {
@@ -40,6 +46,11 @@ export interface AutomationTimeouts {
   loginPollIntervalMs: number;
   sendButtonEnableMs: number;
   sendButtonPollIntervalMs: number;
+  /** Timeout after sustained idle with no generation signals */
+  responseIdleMs: number;
+  /** Absolute safety ceiling regardless of activity */
+  maxResponseWaitMs: number;
+  /** @deprecated Use maxResponseWaitMs */
   responseWaitMs: number;
   urlCaptureMs: number;
 }
@@ -51,7 +62,9 @@ export const DEFAULT_AUTOMATION_TIMEOUTS: AutomationTimeouts = {
   loginPollIntervalMs: 500,
   sendButtonEnableMs: 10_000,
   sendButtonPollIntervalMs: 100,
-  responseWaitMs: 180_000,
+  responseIdleMs: 120_000,
+  maxResponseWaitMs: 1_800_000,
+  responseWaitMs: 1_800_000,
   urlCaptureMs: 30_000
 };
 
@@ -88,6 +101,7 @@ export type ProbeField =
   | "send"
   | "response"
   | "completion"
+  | "generating"
   | "blocked"
   | "loginError"
   | "injection"

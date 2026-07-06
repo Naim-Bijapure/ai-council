@@ -1,6 +1,6 @@
 {
     "appKey": "qwen",
-    "_comment": "Verified 2026-07-01. Uses Ant Design (antd). Input is textarea.message-input-textarea. Send button is button.send-button (renders only after text is typed). Stop button button.stop-button appears during generation (thinking + web search) and disappears on completion — primary completion indicator. Response text is in div.response-message-content.phase-answer (appears only in answer phase, excludes thinking/searching text). div.chat-response-message is fallback (includes 'Thinking completed' prefix). During streaming, send button gets disabled.",
+    "_comment": "Verified 2026-07-01. Uses Ant Design (antd). Input is textarea.message-input-textarea. Send button is button.send-button (renders only after text is typed). Stop button button.stop-button appears during generation (thinking + web search) and disappears on completion — primary completion indicator. Response text is in div.response-message-content.phase-answer (appears only in answer phase, excludes thinking/searching text). div.chat-response-message is fallback (includes 'Thinking completed' prefix). During streaming, send button gets disabled. responseMonitor limits completion detection to answer phase only.",
     "selectors": {
         "input": [
             "textarea.message-input-textarea",
@@ -16,6 +16,14 @@
             "div.response-message-content",
             "div.chat-response-message",
             "div[id^=\"chat-response-message-\"]"
+        ],
+        "responseMonitor": [
+            "div.response-message-content.phase-answer"
+        ],
+        "generating": [
+            "div.response-message-content:not(.phase-answer)",
+            "div.chat-response-message .thinking",
+            "div.chat-response-message .searching"
         ],
         "completion": [
             "button.stop-button"

@@ -2,12 +2,15 @@ import { browser } from "wxt/browser";
 import { getSupportedApp } from "../appRegistry";
 import { buildJudgePrompt } from "../judgePrompt";
 import { saveSession } from "../history";
+import { buildAuthorPrompt, buildRelayJudgePrompt, buildReviewerPrompt } from "../relayPrompt";
+import { parseRelayResponse } from "../relayResponseParser";
 import {
   type ActiveCouncilSession,
   type AgentResult,
   type AppKey,
   type JudgeStep,
-  type StoredCouncilSession
+  type RelayRole,
+  toStoredSession
 } from "../types";
 import { openTabAndListenForReady } from "./diagnostics";
 import { getActiveWindowId } from "./windowContext";
@@ -123,6 +126,8 @@ export async function runCouncil(
   };
 
   const agentKeys = session.agentsUsed;
+  const isRelay = session.councilType === "relay";
+  let currentDraft = "";
 
   try {
     if (checkCancelled()) return;
@@ -137,7 +142,35 @@ export async function runCouncil(
       const key = agentKeys[i];
       if (checkCancelled()) break;
 
-      updateAgent(key, { status: "injecting", startedAt: Date.now() });
+      const relayRole: RelayRole | undefined = isRelay ? (i === 0 ? "author" : "reviewer") : undefined;
+      const inputDraft = isRelay && i > 0 ? currentDraft : undefined;
+      const agentPrompt = isRelay
+        ? (i === 0
+            ? buildAuthorPrompt(session.prompt)
+            : buildReviewerPrompt({
+                question: session.prompt,
+                previousDraft: currentDraft,
+                reviewerName: getSupportedApp(key).displayName,
+                stepIndex: i + 1
+              }).text)
+        : session.prompt;
+
+      if (isRelay && relayRole === "reviewer" && !currentDraft.trim()) {
+        updateAgent(key, {
+          status: "error",
+          errorReason: "dom_error",
+          relayRole,
+          inputDraft: "",
+          completedAt: Date.now()
+        });
+        continue;
+      }
+
+      updateAgent(key, {
+        status: "injecting",
+        startedAt: Date.now(),
+        ...(relayRole ? { relayRole, inputDraft } : {})
+      });
 
       const url = getSupportedApp(key).newChatUrl;
 
@@ -163,6 +196,8 @@ export async function runCouncil(
         }
       } else {
         // Subsequent agents: navigate the same council tab to the new URL
+        const previousKey = agentKeys[i - 1];
+        await sendCancelToTab(state.councilTabId, previousKey);
         try {
           await browser.tabs.update(state.councilTabId, { url });
         } catch {
@@ -199,10 +234,15 @@ export async function runCouncil(
 
       // Send the prompt and WAIT for the full response, racing against a
       // skip signal so the user can abort a stuck/slow agent.
+      updateAgent(key, {
+        status: "waiting",
+        ...(relayRole ? { relayRole, inputDraft } : {})
+      });
+
       const adapterResult = await sendAgentRunWithSkip(
         key,
         state.councilTabId,
-        session.prompt,
+        agentPrompt,
         timeouts,
         state,
         callbacks
@@ -234,7 +274,8 @@ export async function runCouncil(
           status: "skipped",
           errorReason: "skipped",
           completedAt: Date.now(),
-          chatUrl: agentChatUrl ?? undefined
+          chatUrl: agentChatUrl ?? undefined,
+          ...(relayRole ? { relayRole, inputDraft } : {})
         });
         continue;
       }
@@ -244,69 +285,79 @@ export async function runCouncil(
           status: "error",
           errorReason: adapterResult.errorReason ?? "dom_error",
           completedAt: Date.now(),
-          chatUrl: agentChatUrl ?? undefined
+          chatUrl: agentChatUrl ?? undefined,
+          ...(relayRole ? { relayRole, inputDraft } : {})
         });
         continue;
       }
 
-      updateAgent(key, {
-        status: "done",
-        responseText: adapterResult.responseText ?? "",
-        completedAt: adapterResult.completedAt ?? Date.now(),
-        chatUrl: agentChatUrl ?? undefined
-      });
+      const responseText = adapterResult.responseText ?? "";
+      if (isRelay && relayRole) {
+        const parsed = parseRelayResponse(responseText, relayRole);
+        currentDraft = parsed.revisedAnswerText;
+        updateAgent(key, {
+          status: "done",
+          responseText,
+          critiqueText: parsed.critiqueText,
+          revisedAnswerText: parsed.revisedAnswerText,
+          completedAt: adapterResult.completedAt ?? Date.now(),
+          chatUrl: agentChatUrl ?? undefined,
+          relayRole,
+          inputDraft
+        });
+      } else {
+        updateAgent(key, {
+          status: "done",
+          responseText,
+          completedAt: adapterResult.completedAt ?? Date.now(),
+          chatUrl: agentChatUrl ?? undefined
+        });
+      }
     }
 
-    if (checkCancelled()) return;
+    if (await abortIfCancelled(session, callbacks, state, checkCancelled)) return;
 
-    // Step 4: Check if any agent succeeded
+    if (isRelay) {
+      session = update({ relayFinalDraft: currentDraft });
+    }
+
+    // Step 4: Check if we have enough to proceed to judge
     const successfulAgents = session.agentResults.filter((r) => r.status === "done");
-    if (successfulAgents.length === 0) {
-      await finalizeSession(session, callbacks, state);
-
-      // Override status to partial_failure (finalizeSession may set "error")
+    const canProceedToJudge = isRelay ? currentDraft.trim().length > 0 : successfulAgents.length > 0;
+    if (!canProceedToJudge) {
       session = update({
         status: "partial_failure",
-        errorMessage: "All agents failed to produce a response",
+        errorMessage: isRelay
+          ? "Relay chain produced no refined answer — judge step skipped"
+          : "All agents failed to produce a response",
         durationMs: Date.now() - session.timestamp
       });
 
-      // Re-save as partial_failure
-      const stored: StoredCouncilSession = {
-        timestamp: session.timestamp,
-        prompt: session.prompt,
-        agentsUsed: session.agentsUsed,
-        judgeApp: session.judgeApp,
-        judgeChatUrl: null,
-        agentResults: session.agentResults,
-        judgeStep: session.judgeStep,
-        agentTabUrl: session.agentTabUrl,
-        status: "partial_failure",
-        durationMs: session.durationMs,
-        judgePrompt: session.judgePrompt,
-        errorMessage: session.errorMessage
-      };
-
-      await saveSession(stored);
+      await saveSession(toStoredSession(session));
       callbacks.onUpdate(session);
       callbacks.onComplete(session);
+      cleanup(state);
       return;
     }
 
-    // Step 5: Build judge prompt from successful agent responses
-    const judgePrompt = buildJudgePrompt({
-      prompt: session.prompt,
-      agentResults: session.agentResults
-    });
+    // Step 5: Begin judge phase immediately so the UI does not appear stuck on
+    // "Waiting…" while we build a potentially large relay judge prompt or
+    // navigate the council tab to the judge app.
+    session = update({ status: "judge_handoff" });
+    updateJudge({ status: "injecting", startedAt: Date.now() });
+
+    const judgePrompt = isRelay
+      ? buildRelayJudgePrompt({
+          prompt: session.prompt,
+          agentResults: session.agentResults,
+          finalDraft: currentDraft
+        })
+      : buildJudgePrompt({
+          prompt: session.prompt,
+          agentResults: session.agentResults
+        });
 
     session = update({ judgePrompt: judgePrompt.text });
-
-    // Start the judge phase visibly as soon as agents are done.
-    // The tab navigation + content ready wait is part of "injecting the judge prompt"
-    // (we must have the correct page and content script ready before we can type).
-    // This prevents the judge from appearing stuck on "Waiting..." during what
-    // can be a slow cross-origin tab navigation + SPA load for the judge app.
-    updateJudge({ status: "injecting", startedAt: Date.now() });
 
     // Step 6: Navigate the council tab to the judge URL (reuse same tab)
     const judgeKey = session.judgeApp;
@@ -344,6 +395,7 @@ export async function runCouncil(
       }
     } else {
       // Navigate the existing council tab to the judge URL
+      await sendCancelToTab(state.councilTabId, session.agentsUsed[session.agentsUsed.length - 1]);
       try {
         await browser.tabs.update(state.councilTabId, { url: judgeNewChatUrl });
       } catch {
@@ -380,16 +432,14 @@ export async function runCouncil(
       }
     }
 
-    if (checkCancelled()) return;
+    if (await abortIfCancelled(session, callbacks, state, checkCancelled)) return;
 
     // Judge phase already marked "injecting" above (includes tab prep).
     // We now perform the actual prompt injection + send confirmation.
     const judgeSendResult = state.judgeTabId != null
       ? await sendJudgeRun(judgeKey, state.judgeTabId, judgePrompt.text, timeouts, state)
       : { sent: false, errorReason: "tab_load_timeout" as const };
-    if (checkCancelled()) {
-      return;
-    }
+    if (await abortIfCancelled(session, callbacks, state, checkCancelled)) return;
 
     if (!judgeSendResult.sent) {
       updateJudge({
@@ -420,7 +470,7 @@ export async function runCouncil(
       }
     }
 
-    if (checkCancelled()) return;
+    if (await abortIfCancelled(session, callbacks, state, checkCancelled)) return;
 
     session = update({ judgeChatUrl: judgeUrl });
     await finalizeSession(session, callbacks, state);
@@ -436,6 +486,46 @@ export async function runCouncil(
   }
 }
 
+const JUDGE_SEND_TIMEOUT_MS = 45_000;
+
+async function sendCancelToTab(tabId: number, appKey: AppKey): Promise<void> {
+  const message: BgToContentMessage = { type: "CANCEL", appKey };
+  await browser.tabs.sendMessage(tabId, message).catch(() => {
+    // Tab may have navigated away — content script not reachable.
+  });
+}
+
+async function abortIfCancelled(
+  session: ActiveCouncilSession,
+  callbacks: CouncilRunnerCallbacks,
+  state: ActiveRunState,
+  checkCancelled: () => boolean
+): Promise<boolean> {
+  if (!checkCancelled()) return false;
+
+  if (session.status === "running" || session.status === "judge_handoff") {
+    const aborted: ActiveCouncilSession = {
+      ...session,
+      status: "cancelled",
+      durationMs: Date.now() - session.timestamp,
+      judgeStep:
+        session.judgeStep.status === "sent"
+          ? session.judgeStep
+          : {
+              ...session.judgeStep,
+              status: "error",
+              errorReason: "cancelled",
+              completedAt: Date.now()
+            }
+    };
+    await saveSession(toStoredSession(aborted));
+    callbacks.onUpdate(aborted);
+    callbacks.onComplete(aborted);
+  }
+
+  return true;
+}
+
 async function sendAgentRun(
   appKey: AppKey,
   tabId: number,
@@ -449,7 +539,7 @@ async function sendAgentRun(
     const timer = setTimeout(() => {
       removeMessageListener();
       resolve({ success: false, errorReason: "timeout" });
-    }, timeouts.responseWaitMs);
+    }, timeouts.maxResponseWaitMs);
 
     const listener = (message: ContentToBgMessage, sender: Browser.runtime.MessageSender) => {
       if (message.type === "ADAPTER_RESULT" && message.appKey === appKey && sender.tab?.id === tabId) {
@@ -537,7 +627,7 @@ async function sendJudgeRun(
     const timer = setTimeout(() => {
       removeMessageListener();
       resolve({ sent: false, errorReason: "timeout" });
-    }, timeouts.responseWaitMs);
+    }, JUDGE_SEND_TIMEOUT_MS);
 
     const listener = (message: ContentToBgMessage, sender: Browser.runtime.MessageSender) => {
       if (message.type === "SEND_CONFIRMED" && message.appKey === appKey && sender.tab?.id === tabId) {
@@ -570,6 +660,11 @@ async function sendJudgeRun(
   });
 }
 
+function isOnTargetChatUrl(tabUrl: string | undefined, newChatUrl: string): boolean {
+  if (!tabUrl) return false;
+  return tabUrl === newChatUrl || isNewChatUrl(tabUrl, newChatUrl);
+}
+
 function openTabAndListenForReadyOnExistingTab(
   tabId: number,
   newChatUrl: string,
@@ -585,7 +680,7 @@ function openTabAndListenForReadyOnExistingTab(
 
     const contentReadyDeadline = Date.now() + tabLoadTimeoutMs + contentReadyTimeoutMs;
 
-    const finish = (): void => {
+    const resolveReady = (tabUrl: string | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(loadTimer);
@@ -594,10 +689,27 @@ function openTabAndListenForReadyOnExistingTab(
       browser.runtime.onMessage.removeListener(messageListener);
       resolve({
         tabId,
-        tabUrl: null,
+        tabUrl,
         loaded: tabLoaded,
         contentReady
       });
+    };
+
+    const finish = (): void => {
+      if (settled) return;
+      void browser.tabs.get(tabId).then((tab) => {
+        resolveReady(tab.url ?? null);
+      }).catch(() => {
+        resolveReady(null);
+      });
+    };
+
+    const maybeResolve = (): void => {
+      if (!tabLoaded || !contentReady || settled) return;
+      void browser.tabs.get(tabId).then((tab) => {
+        if (!isOnTargetChatUrl(tab.url, newChatUrl)) return;
+        resolveReady(tab.url ?? null);
+      }).catch(() => finish());
     };
 
     const messageListener = (message: ContentToBgMessage, sender: Browser.runtime.MessageSender) => {
@@ -606,22 +718,13 @@ function openTabAndListenForReadyOnExistingTab(
         message.appKey === appKey &&
         sender.tab?.id === tabId
       ) {
-        contentReady = true;
-        if (tabLoaded) {
-          void browser.tabs.get(tabId).then((tab) => {
-            settled = true;
-            clearTimeout(loadTimer);
-            clearTimeout(readyTimer);
-            browser.tabs.onUpdated.removeListener(tabListener);
-            browser.runtime.onMessage.removeListener(messageListener);
-            resolve({
-              tabId,
-              tabUrl: tab.url ?? null,
-              loaded: tabLoaded,
-              contentReady
-            });
-          }).catch(() => finish());
-        }
+        void browser.tabs.get(tabId).then((tab) => {
+          if (!isOnTargetChatUrl(tab.url, newChatUrl)) return;
+          contentReady = true;
+          maybeResolve();
+        }).catch(() => {
+          // Ignore transient tab read failures — timeout will handle it.
+        });
       }
     };
 
@@ -630,21 +733,16 @@ function openTabAndListenForReadyOnExistingTab(
       changeInfo: Browser.tabs.OnUpdatedInfo,
       updatedTab: Browser.tabs.Tab
     ) => {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
+      if (updatedTabId !== tabId) return;
+
+      if (changeInfo.url) {
+        // A navigation started — discard any CONTENT_READY from the previous page.
+        contentReady = false;
+      }
+
+      if (changeInfo.status === "complete" && isOnTargetChatUrl(updatedTab.url, newChatUrl)) {
         tabLoaded = true;
-        if (contentReady) {
-          settled = true;
-          clearTimeout(loadTimer);
-          clearTimeout(readyTimer);
-          browser.tabs.onUpdated.removeListener(tabListener);
-          browser.runtime.onMessage.removeListener(messageListener);
-          resolve({
-            tabId,
-            tabUrl: updatedTab.url ?? null,
-            loaded: tabLoaded,
-            contentReady
-          });
-        }
+        maybeResolve();
       }
     };
 
@@ -663,23 +761,11 @@ function openTabAndListenForReadyOnExistingTab(
     browser.runtime.onMessage.addListener(messageListener);
     browser.tabs.onUpdated.addListener(tabListener);
 
-    // The tab is already being navigated by the caller; handle fast path
+    // Fast path: tab is already on the target URL (no navigation needed).
     void browser.tabs.get(tabId).then((tab) => {
-      if (tab.status === "complete" && tab.url && tab.url !== newChatUrl && !isNewChatUrl(tab.url, newChatUrl)) {
+      if (tab.status === "complete" && isOnTargetChatUrl(tab.url, newChatUrl)) {
         tabLoaded = true;
-        if (contentReady) {
-          settled = true;
-          clearTimeout(loadTimer);
-          clearTimeout(readyTimer);
-          browser.tabs.onUpdated.removeListener(tabListener);
-          browser.runtime.onMessage.removeListener(messageListener);
-          resolve({
-            tabId,
-            tabUrl: tab.url ?? null,
-            loaded: tabLoaded,
-            contentReady
-          });
-        }
+        maybeResolve();
       }
     }).catch(() => finish());
   });
@@ -841,22 +927,7 @@ async function finalizeSession(
     durationMs
   };
 
-  const stored: StoredCouncilSession = {
-    timestamp: finalSession.timestamp,
-    prompt: finalSession.prompt,
-    agentsUsed: finalSession.agentsUsed,
-    judgeApp: finalSession.judgeApp,
-    judgeChatUrl: finalSession.judgeChatUrl,
-    agentResults: finalSession.agentResults,
-    judgeStep: finalSession.judgeStep,
-    agentTabUrl: finalSession.agentTabUrl,
-    status: finalSession.status,
-    durationMs: finalSession.durationMs,
-    judgePrompt: finalSession.judgePrompt,
-    errorMessage: finalSession.errorMessage
-  };
-
-  await saveSession(stored);
+  await saveSession(toStoredSession(finalSession));
   callbacks.onUpdate(finalSession);
   callbacks.onComplete(finalSession);
 }

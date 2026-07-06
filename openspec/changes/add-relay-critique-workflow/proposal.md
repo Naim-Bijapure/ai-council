@@ -1,6 +1,6 @@
 # Proposal: Relay-Critique Workflow (agent → agent chain)
 
-Status: Draft (planning only — no code yet)
+Status: Implemented
 
 ## Why
 
