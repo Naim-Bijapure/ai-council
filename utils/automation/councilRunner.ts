@@ -21,10 +21,27 @@ import {
 } from "./types";
 
 // Get whether agent popups should be created focused based on session settings.
-// When silentMode is true, popups open in background (focused=false).
-// When silentMode is false (default), popups open in foreground (focused=true).
-function getAgentPopupFocused(session: ActiveCouncilSession): boolean {
-  return session.silentMode !== true;
+// In silent mode, popups still open in foreground initially (focused=true)
+// to ensure reliable injection, then get minimized after submission.
+// In non-silent mode, popups stay in foreground throughout.
+function getAgentPopupFocused(_session: ActiveCouncilSession): boolean {
+  // Always open in foreground for reliable injection
+  return true;
+}
+
+// After injection succeeds, minimize the window in silent mode to get it out of the way.
+async function minimizeWindowAfterInjection(
+  windowId: number | null,
+  silentMode: boolean
+): Promise<void> {
+  if (!silentMode || windowId == null) return;
+  
+  try {
+    // Minimize the window to get it out of the user's way
+    await browser.windows.update(windowId, { state: "minimized" });
+  } catch {
+    // Window may have been closed
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -164,8 +181,12 @@ export async function runCouncil(
             session = update({ agentTabUrl: popup.tabUrl });
           }
 
-          // Send the prompt and WAIT for the full response, then close the popup.
+          // Send the prompt and WAIT for the full response.
           const adapterResult = await sendAgentRun(key, tabId, session.prompt, timeouts, state);
+          
+          // In silent mode, minimize the window after injection completes.
+          await minimizeWindowAfterInjection(popup?.windowId ?? null, session.silentMode === true);
+          
           await closeAgentPopup(state, key);
 
           if (checkCancelled()) return;
@@ -268,6 +289,10 @@ export async function runCouncil(
 
         // Send the prompt and WAIT for the full response.
         const adapterResult = await sendAgentRun(key, popupTabId, session.prompt, timeouts, state);
+        
+        // In silent mode, minimize the window after injection completes.
+        await minimizeWindowAfterInjection(popupWindowId, session.silentMode === true);
+        
         state.agentTabIds.delete(key);
 
         if (checkCancelled()) break;

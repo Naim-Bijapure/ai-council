@@ -4,11 +4,11 @@
     {
       "name": "Trust Safe Commands",
       "trigger": "PreToolUse",
-      "description": "Automatically trusts safe bash commands, prompts for dangerous ones like rm -rf, sudo, etc.",
+      "description": "Auto-approves all commands except dangerous ones like rm -rf, force push, etc.",
       "matcher": "execute_bash",
       "action": {
         "type": "command",
-        "command": "node -e \"\nconst fs = require('fs');\nlet data = '';\nprocess.stdin.on('data', chunk => data += chunk);\nprocess.stdin.on('end', () => {\n  const ctx = JSON.parse(data);\n  const cmd = ctx.toolInput?.command || '';\n  \n  const dangerousPatterns = [\n    /rm\\\\s+(-[rf]+|\\\\S+)\\\\s*$/i,\n    /rm\\\\s+-[rf]*.*\\\\s+/i,\n    /rm\\\\s+.*\\\\s+-[rf]/i,\n    /rmdir\\\\s+/i,\n    /dd\\\\s+if=/i,\n    /mkfs/i,\n    /fdisk/i,\n    /:(){ :|:& };:/,\n    /chmod\\\\s+(-R\\\\s+)?(000|777)/i,\n    /chown\\\\s+(-R\\\\s+)?/i,\n    />\\\\/dev\\\\/sd[a-z]/i,\n    /wget.*\\\\|.*sh/i,\n    /curl.*\\\\|.*sh/i,\n    /\\\\bsudo\\\\s+rm\\\\b/i,\n    /\\\\bsudo\\\\s+dd\\\\b/i,\n    /\\\\bsudo\\\\s+mkfs\\\\b/i,\n    /git\\\\s+push.*--force/i,\n    /git\\\\s+reset\\\\s+--hard/i,\n    /git\\\\s+clean\\\\s+-[fdx]/i,\n    /drop\\\\s+(table|database)/i,\n    /truncate\\\\s+table/i,\n    /\\\\bsu\\\\s*$/i,\n    /\\\\bsudo\\\\s+su\\\\b/i,\n    /nc\\\\s+.*-e/i,\n    /ncat\\\\s+.*-e/i\n  ];\n  \n  const isDangerous = dangerousPatterns.some(p => p.test(cmd));\n  \n  if (isDangerous) {\n    console.log(JSON.stringify({\n      hookSpecificOutput: {\n        permissionDecision: 'ask',\n        permissionDecisionReason: 'This command matches a dangerous pattern. Please confirm you want to execute it.'\n      }\n    }));\n  }\n  process.exit(0);\n});\n\"",
+        "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const ctx=JSON.parse(d),cmd=ctx.toolInput?.command||'';const dangerous=[/rm\\s+(-[rf]+|\\S+)\\s*$/i,/rm\\s+-[rf]/i,/rmdir/i,/dd\\s+if=/i,/mkfs/i,/fdisk/i,/:\\(\\):{:\\|:&};:/,/chmod.*777/i,/chown\\s+-R/i,/wget.*\\|.*sh/i,/curl.*\\|.*sh/i,/git\\s+push.*--force/i,/git\\s+reset\\s+--hard/i,/git\\s+clean\\s+-f/i,/git\\s+push.*--delete/i,/git\\s+branch.*-D/i,/drop\\s+table/i,/truncate/i,/^su$/i,/nc.*-e/i];const isDangerous=dangerous.some(p=>p.test(cmd));console.log(JSON.stringify({hookSpecificOutput:{permissionDecision:isDangerous?'ask':'allow',permissionDecisionReason:isDangerous?'Dangerous command detected, please confirm.':'Auto-approved'}}));process.exit(0);})\"",
         "timeout": 30
       }
     }
