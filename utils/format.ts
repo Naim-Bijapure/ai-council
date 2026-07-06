@@ -7,7 +7,8 @@ const STATUS_LABELS: Record<AgentStatus, string> = {
   waiting: "Waiting for response",
   done: "Done",
   timeout: "Timed out",
-  error: "Error"
+  error: "Error",
+  skipped: "Skipped"
 };
 
 const ERROR_LABELS: Record<string, string> = {

@@ -97,7 +97,8 @@ const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   sent: "default",
   done: "default",
   timeout: "destructive",
-  error: "destructive"
+  error: "destructive",
+  skipped: "outline"
 };
 
 export default function App() {
@@ -261,6 +262,10 @@ export default function App() {
     }
   }
 
+  async function handleSkipAgent(agentKey: AppKey): Promise<void> {
+    await sendMessage({ type: "SKIP_AGENT", agentKey });
+  }
+
   async function newQuestion(): Promise<void> {
     const response = await sendMessage({ type: "NEW_QUESTION" });
     if (response.ok) {
@@ -350,8 +355,10 @@ export default function App() {
           {activeSession ? (
             <SessionView
               expandedAgent={expandedAgent}
+              isRunning={isRunning}
               onCancel={cancelCouncil}
               onNewQuestion={newQuestion}
+              onSkipAgent={handleSkipAgent}
               onSwitchToJudge={switchToJudge}
               onToggleAgent={setExpandedAgent}
               session={activeSession}
@@ -594,8 +601,10 @@ function RelayCouncilPlaceholder({
 
 interface SessionViewProps {
   expandedAgent: AppKey | null;
+  isRunning: boolean;
   onCancel: () => Promise<void>;
   onNewQuestion: () => Promise<void>;
+  onSkipAgent: (agentKey: AppKey) => Promise<void>;
   onSwitchToJudge: () => Promise<void>;
   onToggleAgent: (key: AppKey | null) => void;
   session: NonNullable<CouncilSnapshot["session"]>;
@@ -603,16 +612,17 @@ interface SessionViewProps {
 
 function SessionView({
   expandedAgent,
+  isRunning,
   onCancel,
   onNewQuestion,
+  onSkipAgent,
   onSwitchToJudge,
   onToggleAgent,
   session
 }: SessionViewProps) {
-  const isRunning = session.status === "running";
   const judgeStep = session.judgeStep ?? { status: "pending" as JudgeStepStatus, startedAt: null, completedAt: null };
   const isHandoff = session.status === "done" || session.status === "partial" || judgeStep.status === "sent";
-  const completedAgents = session.agentResults.filter((r) => r.status === "done" || r.status === "error" || r.status === "timeout").length;
+  const completedAgents = session.agentResults.filter((r) => r.status === "done" || r.status === "error" || r.status === "timeout" || r.status === "skipped").length;
   const totalAgents = session.agentResults.length;
 
   return (
@@ -655,15 +665,48 @@ function SessionView({
             >
               <div className="flex items-center justify-between gap-2">
                 <strong className="text-sm text-foreground">{formatAppName(result.agentKey)} (Agent)</strong>
-                <Badge variant={STATUS_BADGE_VARIANT[result.status] ?? "outline"}>
-                  {formatAgentStatus(result.status, result.errorReason)}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  {isRunning && (result.status === "injecting" || result.status === "waiting") ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onSkipAgent(result.agentKey);
+                      }}
+                      type="button"
+                    >
+                      Skip
+                    </Button>
+                  ) : null}
+                  <Badge
+                    variant={STATUS_BADGE_VARIANT[result.status] ?? "outline"}
+                    className={result.status === "skipped" ? "border-warning text-warning" : undefined}
+                  >
+                    {formatAgentStatus(result.status, result.errorReason)}
+                  </Badge>
+                </div>
               </div>
               {hasResult ? (
                 <p className="mt-2 text-xs text-muted-foreground">{truncateText(result.responseText, 150)}</p>
               ) : null}
               {result.status === "error" && result.errorReason ? (
                 <p className="mt-2 text-xs text-muted-foreground">{formatAgentStatus(result.status, result.errorReason)}</p>
+              ) : null}
+              {result.status === "skipped" ? (
+                <p className="mt-2 text-xs text-warning">Agent skipped by user</p>
+              ) : null}
+              {result.chatUrl ? (
+                <a
+                  href={result.chatUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 block text-[11px] underline text-muted-foreground hover:text-primary"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  View conversation
+                </a>
               ) : null}
               {hasResult ? <span className="mt-2 block text-[11px] italic text-primary">Click to view full response</span> : null}
             </article>
@@ -743,7 +786,8 @@ const AGENT_STATUS_BORDER: Record<string, string> = {
   done: "border-l-success",
   sent: "border-l-success",
   timeout: "border-l-destructive",
-  error: "border-l-destructive"
+  error: "border-l-destructive",
+  skipped: "border-l-warning"
 };
 
 interface HistoryViewProps {
