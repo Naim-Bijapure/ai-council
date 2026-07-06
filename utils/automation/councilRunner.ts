@@ -1,5 +1,6 @@
 import { browser } from "wxt/browser";
 import { getSupportedApp } from "../appRegistry";
+import { isCapturableChatUrl, isNewChatUrl } from "../chatUrl";
 import { buildJudgePrompt } from "../judgePrompt";
 import { saveSession } from "../history";
 import { buildAuthorPrompt, buildRelayJudgePrompt, buildReviewerPrompt } from "../relayPrompt";
@@ -261,7 +262,7 @@ export async function runCouncil(
           const tab = await browser.tabs.get(state.councilTabId);
           const currentUrl = tab.url ?? "";
           // Only use the URL if it's different from the new-chat URL
-          if (currentUrl && currentUrl !== url && !isNewChatUrl(currentUrl, url)) {
+          if (isCapturableChatUrl(currentUrl, url)) {
             agentChatUrl = currentUrl;
           }
         } catch {
@@ -475,21 +476,16 @@ export async function runCouncil(
 
     updateJudge({ status: "sent", completedAt: Date.now() });
 
-    // Capture URL AFTER response completion to get the final conversation URL.
-    // SPAs may change URLs multiple times during a conversation, so we read
-    // the current URL only after the response is complete.
-    let judgeUrl: string | null = null;
+    // Capture the judge conversation URL. SPAs often update the address bar a
+    // few seconds after submit, so prefer the content-script URL and poll the tab.
+    let judgeUrl: string | null = judgeSendResult.chatUrl ?? null;
     if (state.judgeTabId != null) {
-      try {
-        const tab = await browser.tabs.get(state.judgeTabId);
-        const currentUrl = tab.url ?? "";
-        // Only use the URL if it's different from the new-chat URL
-        if (currentUrl && currentUrl !== judgeNewChatUrl && !isNewChatUrl(currentUrl, judgeNewChatUrl)) {
-          judgeUrl = currentUrl;
-        }
-      } catch {
-        // Tab may have been closed — ignore
-      }
+      judgeUrl = await waitForCapturableChatUrl(
+        state.judgeTabId,
+        judgeNewChatUrl,
+        timeouts.urlCaptureMs,
+        judgeUrl
+      );
     }
 
     if (await abortIfCancelled(session, callbacks, state, checkCancelled)) return;
@@ -950,15 +946,46 @@ function openTabAndListenForReadyInWindow(
   });
 }
 
-function isNewChatUrl(url: string, newChatUrl: string): boolean {
-  if (url === newChatUrl) return true;
-  try {
-    const parsed = new URL(url);
-    const newParsed = new URL(newChatUrl);
-    return parsed.origin === newParsed.origin && parsed.pathname === newParsed.pathname && !parsed.search;
-  } catch {
-    return false;
+async function waitForCapturableChatUrl(
+  tabId: number,
+  newChatUrl: string,
+  timeoutMs: number,
+  initialUrl?: string | null
+): Promise<string | null> {
+  if (initialUrl && isCapturableChatUrl(initialUrl, newChatUrl)) {
+    return initialUrl;
   }
+
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      const currentUrl = tab.url ?? "";
+      if (isCapturableChatUrl(currentUrl, newChatUrl)) {
+        return currentUrl;
+      }
+    } catch {
+      return initialUrl && isCapturableChatUrl(initialUrl, newChatUrl) ? initialUrl : null;
+    }
+    await sleep(400);
+  }
+
+  try {
+    const tab = await browser.tabs.get(tabId);
+    const currentUrl = tab.url ?? "";
+    if (isCapturableChatUrl(currentUrl, newChatUrl)) {
+      return currentUrl;
+    }
+    // Last resort: keep the live tab URL so history can reopen the judge tab.
+    if (currentUrl.startsWith("http")) {
+      return currentUrl;
+    }
+  } catch {
+    // Tab closed — fall through.
+  }
+
+  return initialUrl && isCapturableChatUrl(initialUrl, newChatUrl) ? initialUrl : null;
 }
 
 async function finalizeSession(
