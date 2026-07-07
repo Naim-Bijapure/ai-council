@@ -173,7 +173,17 @@ export async function setInputText(
     clearContentEditable(element);
 
     if (shouldUseChunkedInsert(text)) {
-      await insertTextInChunks(element, text);
+      // Try a single paste first — Lexical (Perplexity) and some rich editors
+      // handle paste but ignore execCommand("insertText"). Only fall back
+      // to chunked execCommand if paste fails to land the text.
+      insertViaPaste(element, text);
+      for (let i = 0; i < 12; i++) {
+        await sleep(80);
+        if (current().length >= expected.length) break;
+      }
+      if (current().length < expected.length) {
+        await insertTextInChunks(element, text);
+      }
       element.dispatchEvent(
         new InputEvent("input", {
           bubbles: true,
