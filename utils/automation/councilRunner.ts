@@ -357,7 +357,8 @@ export async function runCouncil(
         })
       : await buildJudgePromptAsync({
           prompt: session.prompt,
-          agentResults: session.agentResults
+          agentResults: session.agentResults,
+          templateId: session.judgePromptTemplateId
         });
 
     session = update({ judgePrompt: judgePrompt.text });

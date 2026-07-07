@@ -65,6 +65,7 @@ export interface CouncilPreferences {
   councilType: CouncilType;
   selectedAgentKeys: AppKey[];
   judgeKey: AppKey;
+  judgePromptTemplateId?: string;
 }
 
 export interface AgentResult {
@@ -95,6 +96,7 @@ export interface ActiveCouncilSession {
   status: SessionStatus;
   durationMs: number;
   judgePrompt?: string;
+  judgePromptTemplateId?: string;
   relayFinalDraft?: string;
   errorMessage?: string;
 }
@@ -120,6 +122,7 @@ export interface RunCouncilRequest {
   judgeKey: AppKey;
   councilType?: CouncilType;
   windowId?: number;
+  judgePromptTemplateId?: string;
 }
 
 export function toStoredSession(session: ActiveCouncilSession): StoredCouncilSession {
@@ -136,6 +139,7 @@ export function toStoredSession(session: ActiveCouncilSession): StoredCouncilSes
     status: session.status,
     durationMs: session.durationMs,
     judgePrompt: session.judgePrompt,
+    judgePromptTemplateId: session.judgePromptTemplateId,
     relayFinalDraft: session.relayFinalDraft,
     errorMessage: session.errorMessage
   };

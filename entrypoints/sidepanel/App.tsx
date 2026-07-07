@@ -39,6 +39,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { PromptEditor } from "./components/PromptEditor";
+import {
+  DEFAULT_JUDGE_PROMPT_TEMPLATE_ID,
+  JUDGE_PROMPT_TEMPLATES
+} from "../../utils/judgePromptTemplates";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -124,6 +128,7 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<AppKey[]>(DEFAULT_AGENT_KEYS);
   const [judgeKey, setJudgeKey] = useState<AppKey>(DEFAULT_JUDGE_KEY);
+  const [promptTemplateId, setPromptTemplateId] = useState(DEFAULT_JUDGE_PROMPT_TEMPLATE_ID);
   const [snapshot, setSnapshot] = useState<CouncilSnapshot>(idleSnapshot);
   const [history, setHistory] = useState<StoredCouncilSession[]>([]);
   const [error, setError] = useState("");
@@ -171,7 +176,7 @@ export default function App() {
     if (!loading) {
       void savePreferences();
     }
-  }, [councilType, selectedAgents, judgeKey]);
+  }, [councilType, selectedAgents, judgeKey, promptTemplateId]);
 
   async function sendMessage(request: PanelRequest): Promise<PanelResponse> {
     return browser.runtime.sendMessage(request);
@@ -195,6 +200,9 @@ export default function App() {
         if (response.preferences.judgeKey) {
           setJudgeKey(response.preferences.judgeKey);
         }
+        if (response.preferences.judgePromptTemplateId) {
+          setPromptTemplateId(response.preferences.judgePromptTemplateId);
+        }
       }
     } else {
       setError(response.error);
@@ -207,7 +215,8 @@ export default function App() {
     const preferences: CouncilPreferences = {
       councilType,
       selectedAgentKeys: selectedAgents,
-      judgeKey
+      judgeKey,
+      judgePromptTemplateId: promptTemplateId
     };
     await sendMessage({ type: "SAVE_PREFERENCES", preferences });
   }
@@ -254,13 +263,14 @@ export default function App() {
     
     const response = await sendMessage({
       type: "RUN_COUNCIL",
-      request: {
-        prompt,
-        agentKeys: selectedAgents,
-        judgeKey,
-        councilType,
-        windowId
-      }
+        request: {
+          prompt,
+          agentKeys: selectedAgents,
+          judgeKey,
+          councilType,
+          windowId,
+          judgePromptTemplateId: promptTemplateId
+        }
     });
 
     if (response.ok) {
@@ -428,19 +438,33 @@ export default function App() {
               </div>
 
               <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-                <Label htmlFor="judge">Judge</Label>
-                <Select value={judgeKey} onValueChange={(value) => setJudgeKey(value as AppKey)}>
-                  <SelectTrigger id="judge">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {judgeApps.map((app) => (
-                      <SelectItem key={app.key} value={app.key}>
-                        {app.displayName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Judge & Prompt Style</Label>
+                <div className="flex gap-2">
+                  <Select value={judgeKey} onValueChange={(value) => setJudgeKey(value as AppKey)}>
+                    <SelectTrigger id="judge" className="flex-1 min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {judgeApps.map((app) => (
+                        <SelectItem key={app.key} value={app.key}>
+                          {app.displayName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={promptTemplateId} onValueChange={setPromptTemplateId}>
+                    <SelectTrigger className="flex-1 min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {JUDGE_PROMPT_TEMPLATES.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <fieldset className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
