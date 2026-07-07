@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { PromptEditor } from "./components/PromptEditor";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -414,10 +414,10 @@ export default function App() {
 
               <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
                 <Label htmlFor="prompt">Prompt</Label>
-                <Textarea
+                <PromptEditor
                   id="prompt"
                   value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
+                  onChange={setPrompt}
                   placeholder="Ask one question for the council..."
                   rows={8}
                 />

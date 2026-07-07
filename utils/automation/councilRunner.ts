@@ -198,7 +198,7 @@ export async function runCouncil(
       } else {
         // Subsequent agents: navigate the same council tab to the new URL
         const previousKey = agentKeys[i - 1];
-        await sendCancelToTab(state.councilTabId, previousKey);
+        await sendCancelToTab(state.councilTabId);
         try {
           await browser.tabs.update(state.councilTabId, { url });
         } catch {
@@ -400,7 +400,7 @@ export async function runCouncil(
       }
     } else {
       // Navigate the existing council tab to the judge URL
-      await sendCancelToTab(state.councilTabId, session.agentsUsed[session.agentsUsed.length - 1]);
+      await sendCancelToTab(state.councilTabId);
       try {
         await browser.tabs.update(state.councilTabId, { url: judgeNewChatUrl });
       } catch {
@@ -508,8 +508,8 @@ const JUDGE_SEND_TIMEOUT_MS = 90_000;
 const JUDGE_PHASE_TIMEOUT_MS = 180_000;
 const CONTENT_READY_NUDGE_INTERVAL_MS = 4_000;
 
-async function sendCancelToTab(tabId: number, appKey: AppKey): Promise<void> {
-  const message: BgToContentMessage = { type: "CANCEL", appKey };
+async function sendCancelToTab(tabId: number): Promise<void> {
+  const message: BgToContentMessage = { type: "CANCEL" };
   await browser.tabs.sendMessage(tabId, message).catch(() => {
     // Tab may have navigated away — content script not reachable.
   });
