@@ -1,30 +1,30 @@
-# AI Council — logo samples
+# AI Council — logo samples (modern set)
 
 Branch: `feature/logo-samples`
 
-These are concept samples for the extension icon / brand mark. Pick one (or mix ideas); next step is to export final sizes for Chrome:
+Kept the roundtable direction you liked (**03**), deleted the rest of the first batch, and added modern AI Council concepts.
 
-- `icon-16.png`
-- `icon-32.png`
-- `icon-48.png`
-- `icon-128.png`
+## Kept
 
-## Samples
+| # | File | Concept |
+|---|------|---------|
+| **03** | `03-roundtable-orbs.jpg` | Roundtable of AI orbs + lead judge (your pick so far) |
 
-| File | Concept |
-|------|---------|
-| `01-agent-network-hub.jpg` | Multiple agent nodes around a central judge hub (deliberation network) |
-| `02-monogram-c-council.jpg` | Letter **C** (Council) made of agent dots + center judge |
-| `03-roundtable-orbs.jpg` | Abstract roundtable of AI orbs with a lead judge seat |
-| `04-chat-panel-balance.jpg` | Chat/panel shapes + subtle balance (multi-agent → verdict) |
-| `05-hex-collective-minds.jpg` | Hex badge with collective “minds” / council symbol |
+## New modern samples
+
+| # | File | Concept |
+|---|------|---------|
+| **06** | `06-modern-roundtable-flat.jpg` | Cleaner flat roundtable (modern SaaS) |
+| **07** | `07-glass-avatars-verdict.jpg` | Glassmorphic avatars → central verdict spark |
+| **08** | `08-orbit-nodes-minimal.jpg` | Minimal orbit nodes around a judge hub |
+| **09** | `09-venn-consensus.jpg` | Overlapping circles = multi-model consensus |
+| **10** | `10-chat-ring-center.jpg` | Ring of chat marks around a center outcome |
+| **11** | `11-hex-table-tokens.jpg` | Hex table with agent tokens + center judge |
+| **12** | `12-03-refined-cleaner.jpg` | Refinement of **03** — cleaner / flatter |
+| **13** | `13-03-refined-cyan.jpg` | Refinement of **03** — cyan accent variant |
 
 ## How to choose
 
-Reply with a sample number (e.g. **03**) or filename. We will then:
+Reply with a number (e.g. **12** or **08**). Next we export `public/icon-{16,32,48,128}.png` from the winner.
 
-1. Refine that design if needed  
-2. Replace `public/icon-*.png` with proper sizes  
-3. Rebuild the release zip  
-
-Product: **AI Council** — multi-LLM agents + judge in a browser side panel.
+Product: **AI Council** — multi-LLM agents + judge in a side panel.
