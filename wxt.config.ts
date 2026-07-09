@@ -15,7 +15,8 @@ export default defineConfig({
   },
   manifest: {
     name: "AI Council",
-    description: "Run a demo AI council workflow from a Chrome side panel.",
+    description:
+      "Run multi-LLM AI council workflows from a Chrome side panel.",
     version: "0.1.0",
     permissions: ["storage", "tabs"],
     host_permissions: [

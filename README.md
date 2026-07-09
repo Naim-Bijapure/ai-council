@@ -2,9 +2,23 @@
 
 A Chrome/Brave extension built with WXT, React, TypeScript, and Manifest V3.
 
-The extension automates a configurable AI Council workflow: it sends your prompt to one or more selected LLM **agents** in parallel (ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi), extracts each response, builds a structured judge prompt from the successful responses, submits it to a selected **judge** app, confirms the message was sent, and captures the judge's conversation permalink. The judge response is never captured — you read the verdict directly in the judge tab.
+The extension automates a configurable AI Council workflow: it sends your prompt to one or more selected LLM **agents** in parallel (ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi, Perplexity, Grok), extracts each response, builds a structured judge prompt from the successful responses, submits it to a selected **judge** app, confirms the message was sent, and captures the judge's conversation permalink. The judge response is never captured — you read the verdict directly in the judge tab.
 
 Which apps are available as agents, as judge, and how they are configured is driven entirely by `config/apps.json` and the per-app `config/selectors/*.json` files.
+
+## Install (Developer mode)
+
+This project is distributed as a **dev preview** (not on the Chrome Web Store).
+
+**End users:** download the release zip and load it unpacked — see **[INSTALL.md](./INSTALL.md)**.
+
+Short version:
+
+1. Download `ai-council-vX.Y.Z.zip` from [GitHub Releases](../../releases).
+2. Unzip to a permanent folder.
+3. Open `chrome://extensions` (or `brave://extensions`) → enable **Developer mode**.
+4. **Load unpacked** → select the folder that contains `manifest.json` (not the `.zip` itself).
+5. Click the extension icon to open the side panel.
 
 ## Tech Stack
 
@@ -215,15 +229,31 @@ Create a production build:
 npm run build
 ```
 
-Create a distributable zip archive:
+Create a distributable zip and copy it to `releases/`:
 
 ```bash
-npm run zip
+npm run release
+# → releases/ai-council-v0.1.0.zip
 ```
+
+(`npm run zip` only builds the zip under `.output/` without copying.)
+
+### Publish a GitHub Release (maintainers)
+
+```bash
+npm run release
+gh release create v0.1.0 releases/ai-council-v0.1.0.zip \
+  --title "v0.1.0 — Dev preview" \
+  --notes "Pre-built extension for load-unpacked install. See INSTALL.md."
+```
+
+Or create the release in the GitHub UI and upload `releases/ai-council-v0.1.0.zip` as an asset.
 
 ## Load In Chrome Or Brave
 
-For production output:
+**From a release zip:** follow [INSTALL.md](./INSTALL.md).
+
+**From a local production build:**
 
 1. Run `npm run build`.
 2. Open `chrome://extensions` or `brave://extensions`.
@@ -231,7 +261,7 @@ For production output:
 4. Select Load unpacked.
 5. Choose the generated `.output/chrome-mv3` directory.
 
-For live development output:
+**For live development output:**
 
 1. Run `npm run dev:manual`.
 2. Keep that terminal running.
@@ -240,8 +270,8 @@ For live development output:
 5. Select Load unpacked.
 6. Choose `.output/chrome-mv3-dev`.
 
-Do not choose the `.output` folder itself. Brave/Chrome must be pointed at the exact generated folder that contains `manifest.json`.
-Do not use the zip file with Load unpacked; the zip is for distribution/upload workflows.
+Do not choose the `.output` folder itself. Brave/Chrome must be pointed at the exact generated folder that contains `manifest.json`.  
+Do not use the zip file with Load unpacked — unzip first, then load the folder.
 
 ## Source Layout
 
