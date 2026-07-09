@@ -6,6 +6,10 @@ The extension automates a configurable AI Council workflow: it sends your prompt
 
 Which apps are available as agents, as judge, and how they are configured is driven entirely by `config/apps.json` and the per-app `config/selectors/*.json` files.
 
+## Branding
+
+Extension icon and brand mark live under `assets/brand/` (master logo) and `public/icon-{16,32,48,128}.png` (Chrome sizes). See [assets/brand/README.md](./assets/brand/README.md).
+
 ## Install (Developer mode)
 
 This project is distributed as a **dev preview** (not on the Chrome Web Store).
