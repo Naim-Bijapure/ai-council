@@ -19,6 +19,7 @@ import {
   type JudgeStep,
   type PanelRequest,
   type PanelResponse,
+  type RedTeamRole,
   type RunCouncilRequest,
   toStoredSession
 } from "../utils/types";
@@ -149,6 +150,8 @@ async function startCouncil(request: RunCouncilRequest): Promise<PanelResponse> 
 
   const agentKeys = request.agentKeys;
   const judgeKey = request.judgeKey;
+  const isRedTeam = request.councilType === "redTeam";
+  const redTeamRoles = request.redTeamRoles ?? [];
 
   const judgeStep: JudgeStep = {
     status: "pending",
@@ -164,7 +167,9 @@ async function startCouncil(request: RunCouncilRequest): Promise<PanelResponse> 
     agentsUsed: agentKeys,
     judgeApp: judgeKey,
     judgeChatUrl: null,
-    agentResults: agentKeys.map(createPendingAgentResult),
+    agentResults: agentKeys.map((key, i) =>
+      createPendingAgentResult(key, isRedTeam ? redTeamRoles[i] : undefined)
+    ),
     judgeStep,
     agentTabUrl: null,
     status: "running",
@@ -211,16 +216,36 @@ function validateRunRequest(request: RunCouncilRequest): string | null {
     return "Please select a judge";
   }
 
+  if (request.councilType === "redTeam") {
+    const roles = request.redTeamRoles ?? [];
+    if (roles.length !== request.agentKeys.length) {
+      return "Each red team agent must be assigned a role";
+    }
+    const authors = roles.filter((r) => r === "author").length;
+    const attackers = roles.filter((r) => r === "attacker").length;
+    const defenders = roles.filter((r) => r === "defender").length;
+    if (authors !== 1) {
+      return "Red team needs exactly one Author";
+    }
+    if (attackers < 1) {
+      return "Red team needs at least one Attacker";
+    }
+    if (defenders < 1) {
+      return "Red team needs at least one Defender";
+    }
+  }
+
   return null;
 }
 
-function createPendingAgentResult(agentKey: AppKey): AgentResult {
+function createPendingAgentResult(agentKey: AppKey, redTeamRole?: RedTeamRole): AgentResult {
   return {
     agentKey,
     status: "pending",
     responseText: "",
     startedAt: Date.now(),
-    completedAt: null
+    completedAt: null,
+    ...(redTeamRole ? { redTeamRole } : {})
   };
 }
 

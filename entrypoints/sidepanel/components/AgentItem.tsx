@@ -1,10 +1,16 @@
 import type { SupportedAppWithRoles } from "@/utils/appRegistry";
-import type { AppKey } from "@/utils/types";
+import type { AppKey, RedTeamRole } from "@/utils/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DragHandle } from "./DragHandle";
 import { OrderBadge } from "./OrderBadge";
+
+const RED_TEAM_ROLE_OPTIONS: { value: RedTeamRole; label: string }[] = [
+  { value: "author", label: "Author" },
+  { value: "attacker", label: "Attacker" },
+  { value: "defender", label: "Defender" }
+];
 
 interface DragHandleProps {
   disabled: boolean;
@@ -23,6 +29,9 @@ interface AgentItemProps {
   isDragged: boolean;
   isDropTarget: boolean;
   dragHandleProps: DragHandleProps;
+  redTeamMode?: boolean;
+  redTeamRole?: RedTeamRole | null;
+  onRedTeamRoleChange?: (key: AppKey, role: RedTeamRole) => void;
   onToggle: () => void;
 }
 
@@ -38,6 +47,9 @@ export function AgentItem({
   isDragged,
   isDropTarget,
   dragHandleProps,
+  redTeamMode = false,
+  redTeamRole = null,
+  onRedTeamRoleChange,
   onToggle
 }: AgentItemProps) {
   return (
@@ -63,7 +75,21 @@ export function AgentItem({
 
       {isSelected && orderIndex !== null ? (
         <div className="flex items-center gap-1.5">
-          {roleLabel ? (
+          {redTeamMode ? (
+            <select
+              value={redTeamRole ?? "attacker"}
+              onChange={(e) => onRedTeamRoleChange?.(agent.key, e.target.value as RedTeamRole)}
+              onClick={(e) => e.stopPropagation()}
+              className="h-7 rounded-md border border-border bg-background px-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              aria-label={`Role for ${agent.displayName}`}
+            >
+              {RED_TEAM_ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          ) : roleLabel ? (
             <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
               {roleLabel}
             </Badge>

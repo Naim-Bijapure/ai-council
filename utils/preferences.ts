@@ -2,7 +2,8 @@ import { browser } from "wxt/browser";
 import { DEFAULT_AGENT_KEYS, DEFAULT_JUDGE_KEY, isAppKey, normalizeAppKeys } from "./appRegistry";
 import { DEFAULT_JUDGE_PROMPT_TEMPLATE_ID, JUDGE_PROMPT_TEMPLATES } from "./judgePromptTemplates";
 import { DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID, RELAY_JUDGE_PROMPT_TEMPLATES } from "./relayJudgePromptTemplates";
-import type { CouncilPreferences, CouncilType } from "./types";
+import { DEFAULT_RED_TEAM_JUDGE_PROMPT_TEMPLATE_ID, RED_TEAM_JUDGE_PROMPT_TEMPLATES } from "./redTeamJudgePromptTemplates";
+import type { AppKey, CouncilPreferences, CouncilType, RedTeamRole } from "./types";
 
 const STORAGE_KEY = "aiCouncilPreferences";
 
@@ -11,11 +12,28 @@ export const DEFAULT_PREFERENCES: CouncilPreferences = {
   selectedAgentKeys: DEFAULT_AGENT_KEYS,
   judgeKey: DEFAULT_JUDGE_KEY,
   judgePromptTemplateId: DEFAULT_JUDGE_PROMPT_TEMPLATE_ID,
-  relayJudgePromptTemplateId: DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID
+  relayJudgePromptTemplateId: DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID,
+  redTeamRoles: {},
+  redTeamJudgePromptTemplateId: DEFAULT_RED_TEAM_JUDGE_PROMPT_TEMPLATE_ID
 };
 
+const VALID_RED_TEAM_ROLES: ReadonlySet<RedTeamRole> = new Set(["author", "attacker", "defender"]);
+
 function normalizeCouncilType(value: unknown): CouncilType {
-  return value === "relay" ? "relay" : "agentJudge";
+  if (value === "relay") return "relay";
+  if (value === "redTeam") return "redTeam";
+  return "agentJudge";
+}
+
+function normalizeRedTeamRoles(value: unknown): Partial<Record<AppKey, RedTeamRole>> {
+  if (!value || typeof value !== "object") return {};
+  const result: Partial<Record<AppKey, RedTeamRole>> = {};
+  for (const [key, role] of Object.entries(value as Record<string, unknown>)) {
+    if (isAppKey(key) && typeof role === "string" && VALID_RED_TEAM_ROLES.has(role as RedTeamRole)) {
+      result[key] = role as RedTeamRole;
+    }
+  }
+  return result;
 }
 
 export async function getPreferences(): Promise<CouncilPreferences> {
@@ -35,13 +53,18 @@ export async function getPreferences(): Promise<CouncilPreferences> {
   const relayJudgePromptTemplateId = RELAY_JUDGE_PROMPT_TEMPLATES.some((t) => t.id === saved.relayJudgePromptTemplateId)
     ? saved.relayJudgePromptTemplateId!
     : DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID;
+  const redTeamJudgePromptTemplateId = RED_TEAM_JUDGE_PROMPT_TEMPLATES.some((t) => t.id === saved.redTeamJudgePromptTemplateId)
+    ? saved.redTeamJudgePromptTemplateId!
+    : DEFAULT_RED_TEAM_JUDGE_PROMPT_TEMPLATE_ID;
 
   const preferences: CouncilPreferences = {
     councilType: normalizeCouncilType(saved.councilType),
     selectedAgentKeys: selectedAgentKeys.length > 0 ? selectedAgentKeys : DEFAULT_AGENT_KEYS,
     judgeKey,
     judgePromptTemplateId,
-    relayJudgePromptTemplateId
+    relayJudgePromptTemplateId,
+    redTeamRoles: normalizeRedTeamRoles(saved.redTeamRoles),
+    redTeamJudgePromptTemplateId
   };
 
   await savePreferences(preferences);
@@ -59,7 +82,11 @@ export async function savePreferences(preferences: CouncilPreferences): Promise<
       : DEFAULT_JUDGE_PROMPT_TEMPLATE_ID,
     relayJudgePromptTemplateId: RELAY_JUDGE_PROMPT_TEMPLATES.some((t) => t.id === preferences.relayJudgePromptTemplateId)
       ? preferences.relayJudgePromptTemplateId
-      : DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID
+      : DEFAULT_RELAY_JUDGE_PROMPT_TEMPLATE_ID,
+    redTeamRoles: normalizeRedTeamRoles(preferences.redTeamRoles),
+    redTeamJudgePromptTemplateId: RED_TEAM_JUDGE_PROMPT_TEMPLATES.some((t) => t.id === preferences.redTeamJudgePromptTemplateId)
+      ? preferences.redTeamJudgePromptTemplateId
+      : DEFAULT_RED_TEAM_JUDGE_PROMPT_TEMPLATE_ID
   };
 
   await browser.storage.sync.set({ [STORAGE_KEY]: safePreferences });

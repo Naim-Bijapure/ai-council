@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { AppKey } from "@/utils/types";
+import type { AppKey, RedTeamRole } from "@/utils/types";
 import type { SupportedAppWithRoles } from "@/utils/appRegistry";
 import { AgentItem } from "./AgentItem";
 
@@ -16,6 +16,9 @@ interface AgentOrderListProps {
   selectedKeys: AppKey[]; // Ordered array of selected agent keys
   judgeKey: AppKey; // Current judge key (excluded from selection)
   showRelayRoles?: boolean;
+  redTeamMode?: boolean; // When true, each selected agent shows a role selector
+  redTeamRoles?: Partial<Record<AppKey, RedTeamRole>>;
+  onRedTeamRoleChange?: (key: AppKey, role: RedTeamRole) => void;
   onToggle: (key: AppKey) => void; // Callback when agent checkbox toggled
   onReorder: (sourceKey: AppKey, targetKey: AppKey) => void; // Callback when agent dragged to new position
 }
@@ -35,6 +38,9 @@ export function AgentOrderList({
   selectedKeys,
   judgeKey,
   showRelayRoles = false,
+  redTeamMode = false,
+  redTeamRoles,
+  onRedTeamRoleChange,
   onToggle,
   onReorder
 }: AgentOrderListProps) {
@@ -128,6 +134,9 @@ export function AgentOrderList({
             isDragged={isDragged}
             isDropTarget={isDropTarget}
             dragHandleProps={dragHandleProps}
+            redTeamMode={redTeamMode}
+            redTeamRole={redTeamRoles?.[agent.key] ?? null}
+            onRedTeamRoleChange={onRedTeamRoleChange}
             onToggle={() => onToggle(agent.key)}
           />
         );

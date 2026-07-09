@@ -1,5 +1,11 @@
 import { getRelayJudgePromptTemplate } from "./relayJudgePromptTemplates";
 import { getSupportedApp } from "./appRegistry";
+import {
+  AGENT_ANSWER_WORD_TARGET,
+  REVIEWER_ANSWER_WORD_TARGET,
+  REVIEWER_CRITIQUE_WORD_TARGET,
+  withResponseBudget
+} from "./responseBudget";
 import type { AgentResult } from "./types";
 
 const REVIEWER_PROMPT_LIMIT = 15_000;
@@ -12,7 +18,7 @@ export interface RelayPromptResult {
 }
 
 export function buildAuthorPrompt(question: string): string {
-  return question.trim();
+  return withResponseBudget(question, AGENT_ANSWER_WORD_TARGET);
 }
 
 interface BuildReviewerPromptInput {
@@ -55,8 +61,8 @@ function composeReviewerPrompt(
   return `You are ${input.reviewerName}, reviewing another AI's answer in a relay critique chain (step ${input.stepIndex}).
 
 Your job:
-1. Critique the previous answer — flag factual errors, unsupported claims, missing considerations, weak reasoning, and hallucinations. Be specific.
-2. Produce an improved, corrected answer that keeps what was right and fixes what was wrong.
+1. Critique the previous answer — flag factual errors, unsupported claims, missing considerations, weak reasoning, and hallucinations. Be specific. Keep the critique under ~${REVIEWER_CRITIQUE_WORD_TARGET} words.
+2. Produce an improved, corrected answer that keeps what was right and fixes what was wrong. Keep the revised answer under ~${REVIEWER_ANSWER_WORD_TARGET} words.
 
 Original question:
 ${input.question}

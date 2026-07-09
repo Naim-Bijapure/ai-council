@@ -57,9 +57,13 @@ export interface SupportedApp {
 }
 
 // "agentJudge" — parallel agents then judge. "relay" — sequential critique chain then judge.
-export type CouncilType = "agentJudge" | "relay";
+// "redTeam" — an author drafts an answer, attackers try to break it, defenders harden it, then a judge finalizes.
+export type CouncilType = "agentJudge" | "relay" | "redTeam";
 
 export type RelayRole = "author" | "reviewer";
+
+// Red team pipeline roles. Each selected agent holds exactly one role.
+export type RedTeamRole = "author" | "attacker" | "defender";
 
 export interface CouncilPreferences {
   councilType: CouncilType;
@@ -67,6 +71,9 @@ export interface CouncilPreferences {
   judgeKey: AppKey;
   judgePromptTemplateId?: string;
   relayJudgePromptTemplateId?: string;
+  // Per-agent role assignment for the red team council (keyed by app).
+  redTeamRoles?: Partial<Record<AppKey, RedTeamRole>>;
+  redTeamJudgePromptTemplateId?: string;
 }
 
 export interface AgentResult {
@@ -78,7 +85,12 @@ export interface AgentResult {
   completedAt: number | null;
   chatUrl?: string;
   relayRole?: RelayRole;
+  redTeamRole?: RedTeamRole;
   inputDraft?: string;
+  // Reused across relay + red team:
+  //  - relay reviewer / red team defender: critiqueText = critique/defense, revisedAnswerText = revised/hardened draft
+  //  - red team author: revisedAnswerText = the initial draft
+  //  - red team attacker: critiqueText = the attack findings
   critiqueText?: string;
   revisedAnswerText?: string;
 }
@@ -124,6 +136,8 @@ export interface RunCouncilRequest {
   councilType?: CouncilType;
   windowId?: number;
   judgePromptTemplateId?: string;
+  // For the red team council: role per agent, parallel to (and same order as) agentKeys.
+  redTeamRoles?: RedTeamRole[];
 }
 
 export function toStoredSession(session: ActiveCouncilSession): StoredCouncilSession {
