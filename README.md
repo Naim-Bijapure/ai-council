@@ -4,11 +4,11 @@
 
 A Chrome/Brave extension (`ai-council`) built with WXT, React, TypeScript, and Manifest V3.
 
-The extension automates a configurable AI Council workflow: it sends your prompt to one or more selected LLM **agents** in parallel (ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi, Perplexity, Grok), extracts each response, builds a structured judge prompt from the successful responses, submits it to a selected **judge** app, confirms the message was sent, and captures the judge's conversation permalink. The judge response is never captured — you read the verdict directly in the judge tab.
+**Many AIs. One verdict.** The extension runs a configurable multi-LLM council: it sends your prompt to selected **agents**, collects their responses, builds a structured judge prompt, submits it to a **judge** app, and captures the judge conversation permalink. The judge response is never scraped — you read the verdict in the judge tab.
 
-Which apps are available as agents, as judge, and how they are configured is driven entirely by `config/apps.json` and the per-app `config/selectors/*.json` files.
+Supported apps (agents and/or judge): **ChatGPT, Claude, Gemini, DeepSeek, Qwen, Kimi, Perplexity, Grok**. Availability is driven by `config/apps.json` plus per-app `config/selectors/*.json` and content scripts under `entrypoints/`.
 
-> **Not affiliated** with OpenAI, Anthropic, Google, xAI, DeepSeek, Perplexity, or any other AI provider. Product names are trademarks of their respective owners. Use of third-party sites is subject to those services’ terms.
+> **Not affiliated** with OpenAI, Anthropic, Google, xAI, DeepSeek, Perplexity, Alibaba, Moonshot, or any other AI provider. Product names are trademarks of their respective owners. Use of third-party sites is subject to those services’ terms.
 
 ## Branding
 
@@ -28,6 +28,33 @@ Short version:
 4. **Load unpacked** → select the folder that contains `manifest.json` (not the `.zip` itself).
 5. Click the extension icon to open the side panel.
 
+## Supported apps
+
+| Key | Display name | Default domain | Selectors | Content script |
+|-----|--------------|----------------|-----------|----------------|
+| `chatgpt` | ChatGPT | chatgpt.com / chat.openai.com | `config/selectors/chatgpt.json` | `entrypoints/chatgpt.content.ts` |
+| `claude` | Claude | claude.ai | `config/selectors/claude.json` | `entrypoints/claude.content.ts` |
+| `gemini` | Gemini | gemini.google.com | `config/selectors/gemini.json` | `entrypoints/gemini.content.ts` |
+| `deepseek` | DeepSeek | chat.deepseek.com | `config/selectors/deepseek.json` | `entrypoints/deepseek.content.ts` |
+| `qwen` | Qwen | chat.qwen.ai | `config/selectors/qwen.json` | `entrypoints/qwen.content.ts` |
+| `kimi` | Kimi | www.kimi.com | `config/selectors/kimi.json` | `entrypoints/kimi.content.ts` |
+| `perplexity` | Perplexity | www.perplexity.ai | `config/selectors/perplexity.json` | `entrypoints/perplexity.content.ts` |
+| `grok` | Grok | grok.com | `config/selectors/grok.json` | `entrypoints/grok.content.ts` |
+
+Each app can act as **agent** and/or **judge** (`automationRoles` in `config/apps.json`). Host permissions live in `wxt.config.ts`.
+
+## Council types
+
+| Type | UI label | Behavior (summary) |
+|------|----------|--------------------|
+| `agentJudge` | Agent → Judge Council | Selected agents answer (typically in parallel); judge synthesizes |
+| `relay` | Relay Council | Agents refine in sequence; judge finalizes |
+| `redTeam` | Red Team Council | Author → attackers → defenders → judge |
+| `promptRefiner` | Prompt Refiner | Progressive prompt improvement, then judge output |
+| `debate` | Debate | Multi-round debate among agents; moderator/judge verdict |
+
+Pick the type in the side panel (**Choose council**). Preferences (agents, judge, type, templates) persist via `chrome.storage.sync`.
+
 ## Tech Stack
 
 - WXT for extension entrypoints, manifest generation, development, build, and packaging
@@ -37,7 +64,6 @@ Short version:
 - `chrome.storage.sync` for lightweight preferences
 - IndexedDB for local session history
 - JSON-driven app registry and selector configs (no hardcoded app lists)
-
 ## Setup
 
 Install dependencies:
@@ -137,11 +163,13 @@ config/selectors/chatgpt.json
 config/selectors/claude.json
 config/selectors/deepseek.json
 config/selectors/gemini.json
-config/selectors/kimi.json
 config/selectors/qwen.json
+config/selectors/kimi.json
+config/selectors/perplexity.json
+config/selectors/grok.json
 ```
 
-Each file contains ordered selector arrays (native CSS only — no `:has-text()` or `:has()` pseudo-selectors). The adapter tries each selector in priority order until one matches a live element.
+Each file contains ordered selector arrays (native CSS only — no `:has-text()` or `:has()` pseudo-selectors). The adapter tries each selector in priority order until one matches a live element. Comments in each JSON file note when selectors were last verified against the live DOM when known.
 
 ### Selector groups
 
@@ -170,18 +198,24 @@ The selector JSON is bundled at build time. After editing, the extension must be
 
 ### Prerequisites
 
-- You must be **logged in** to the apps you want to use in the browser profile you use for testing:
-  - ChatGPT — `chatgpt.com`
-  - Claude — `claude.ai`
-  - Gemini — `gemini.google.com`
-  - DeepSeek — `chat.deepseek.com`
-  - Qwen — `chat.qwen.ai`
-  - Kimi — `kimi.moonshot.cn`
+- You must be **logged in** to every app you select as agent or judge in the same browser profile you use for testing:
+
+  | App | Typical URL |
+  |-----|-------------|
+  | ChatGPT | `chatgpt.com` |
+  | Claude | `claude.ai` |
+  | Gemini | `gemini.google.com` |
+  | DeepSeek | `chat.deepseek.com` |
+  | Qwen | `chat.qwen.ai` |
+  | Kimi | `www.kimi.com` (also `kimi.moonshot.cn`) |
+  | Perplexity | `www.perplexity.ai` |
+  | Grok | `grok.com` |
+
 - Run `npm run dev:manual` and load the extension as described above.
 
 ### Run diagnostics
 
-Before running the full council, verify that the extension can detect the chat UIs:
+Before a full council, verify that the extension can detect the chat UIs (when developer tools are enabled in the side panel):
 
 1. Open the side panel.
 2. Pick one or more agents in the **Agents** section.
@@ -191,37 +225,40 @@ Before running the full council, verify that the extension can detect the chat U
 
 ### Run the council
 
-1. Tick one or more **Agents**.
-2. Pick the **Judge** app from the dropdown (the selected judge is automatically excluded from the agent list).
-3. Enter a prompt in the textarea.
-4. Click **Run council**.
-5. The extension opens tabs for each agent, sends your prompt in parallel, waits for each response, and extracts it.
-6. It builds a structured judge prompt from the successful responses and sends it to the judge app.
-7. Once the judge prompt is sent, the panel shows **"Judge is running in [App Name]"** with a **Switch to judge tab** button.
-8. Click **Switch to judge tab** to open the judge's conversation and read the verdict.
+1. Choose a **Council type** (Agent → Judge, Relay, Red Team, Prompt Refiner, or Debate).
+2. Tick one or more **Agents** (and assign roles when the type requires them, e.g. Red Team).
+3. Pick the **Judge** app and optional judge prompt template / style.
+4. Enter a prompt in the editor.
+5. Click **Run council**.
+6. The extension opens tabs, drives each app via its content script, and tracks status in the panel (Pending / Done / Skipped / errors). You can **Skip** a stuck agent or **Cancel** the run.
+7. After agent work finishes, it builds a structured judge prompt from successful responses and sends it to the judge app.
+8. When the judge prompt is sent, use **Switch to judge tab** to read the verdict in that app.
 9. Click **New question** to reset and start over.
-10. Use **Cancel** during execution to abort the run.
-11. Check the **History** tab for saved sessions. Each row shows the timestamp, status, agent count, and judge app. Rows with a captured judge URL are tappable; rows with `Judge URL unavailable` are dimmed/non-tappable.
+10. Check the **History** tab for saved sessions (timestamp, status, agents, judge). Rows with a captured judge URL are tappable.
 
-Your agent and judge selections are saved to `chrome.storage.sync` and restored on the next side-panel open.
+Your agent, judge, council type, and related preferences are saved to `chrome.storage.sync` and restored on the next side-panel open.
 
 ## Timeouts
 
+Defaults from `utils/automation/types.ts` (`DEFAULT_AUTOMATION_TIMEOUTS`):
+
 | Phase | Timeout |
 |---|---|
-| Tab load | 15 seconds |
-| Content script readiness (CONTENT_READY handshake) | 10 seconds |
+| Tab load | 30 seconds |
+| Content script readiness (CONTENT_READY handshake) | 20 seconds |
 | Login grace period (polling for input element) | 10 seconds |
-| Send button enable wait | 3 seconds |
-| Agent response wait | 45 seconds |
+| Send button enable wait | 10 seconds |
+| Response idle (no generation signals) | 120 seconds |
+| Max response wait (absolute ceiling) | 30 minutes |
 | Judge URL capture | 30 seconds |
 
 ## Known Limitations
 
 - The judge response is never captured or stored. The user reads it directly in the judge app's tab.
-- If the judge app doesn't change its URL within 30 seconds of sending the judge prompt, `judgeChatUrl` is stored as null and the history row is dimmed/non-tappable.
-- One session at a time. The submit button is disabled while a session is in progress.
-- Selector values for Claude, Gemini, Qwen, and Kimi are placeholders. Real DOM values must be updated after inspecting each app's live UI (the diagnostic flow helps find the right selectors).
+- If the judge app doesn't change its URL within 30 seconds of sending the judge prompt, `judgeChatUrl` may be stored as null and the history row is dimmed/non-tappable.
+- One active council session at a time while a run is in progress.
+- Third-party chat UIs change often; selectors under `config/selectors/` (including `grok.json`, `perplexity.json`, etc.) may need updates when an app redesigns its DOM.
+- Automation must comply with each site’s terms of use.
 
 ## Build
 
@@ -285,46 +322,45 @@ Do not use the zip file with Load unpacked — unzip first, then load the folder
 
 ```text
 config/
-  apps.json                    # Supported apps + automation roles (data)
+  apps.json                    # All supported apps + automation roles
   selectors/
-    chatgpt.json               # ChatGPT DOM selectors
-    claude.json                # Claude DOM selectors
-    deepseek.json              # DeepSeek DOM selectors
-    gemini.json                # Gemini DOM selectors
-    kimi.json                  # Kimi DOM selectors
-    qwen.json                  # Qwen DOM selectors
+    chatgpt.json
+    claude.json
+    deepseek.json
+    gemini.json
+    qwen.json
+    kimi.json
+    perplexity.json
+    grok.json                  # Grok (grok.com) DOM selectors
 entrypoints/
-  background.ts                # MV3 background service worker, multi-agent orchestrator
-  chatgpt.content.ts           # ChatGPT content script
-  claude.content.ts            # Claude content script
-  deepseek.content.ts          # DeepSeek content script
-  gemini.content.ts            # Gemini content script
-  kimi.content.ts              # Kimi content script
-  qwen.content.ts              # Qwen content script
+  background.ts                # MV3 service worker / orchestrator
+  chatgpt.content.ts
+  claude.content.ts
+  deepseek.content.ts
+  gemini.content.ts
+  qwen.content.ts
+  kimi.content.ts
+  perplexity.content.ts
+  grok.content.ts
   sidepanel/
-    index.html                 # Side panel document shell
-    main.tsx                   # React side panel mount point
-    App.tsx                    # Council, diagnostics, and History UI
-    style.css                  # Side panel styles
+    App.tsx                    # Council types UI, run state, history
+    components/                # Agent list, prompt editor, etc.
 utils/
-  appRegistry.ts               # Loads config/apps.json, exposes app/role helpers
-  format.ts                    # UI formatting helpers
+  appRegistry.ts               # Loads config/apps.json
   history.ts                   # IndexedDB session storage
-  judgePrompt.ts               # Structured judge prompt builder
-  preferences.ts               # chrome.storage.sync preference helpers
-  types.ts                     # Shared TypeScript contracts
+  preferences.ts               # chrome.storage.sync helpers
+  types.ts                     # Shared contracts (CouncilType, sessions, …)
+  judgePrompt*.ts / relay* / redTeam* / debate* / promptRefiner*
+                               # Per-council-type prompt builders & templates
   automation/
-    types.ts                   # Automation types (timeouts, results, selectors)
-    messages.ts                # Typed runtime message bridge (bg ↔ content scripts)
-    selectorConfig.ts          # Selector JSON loader (all 6 apps)
-    readiness.ts               # Login grace period + input detection
-    adapterHelpers.ts          # Shared DOM helpers (inject, send, extract)
-    genericAdapter.ts          # Single adapter driving any app from its selector JSON
-    contentBridge.ts           # Content script message bridge factory
-    diagnostics.ts             # Background diagnostic helpers (open tabs, handshake)
-    councilRunner.ts           # Multi-agent orchestrator (replaces fixedFlowRunner)
-wxt.config.ts                  # WXT and generated manifest configuration
-tsconfig.json                  # TypeScript configuration
+    selectorConfig.ts          # Loads all selector JSON files
+    genericAdapter.ts          # Shared agent/judge automation
+    councilRunner.ts           # Multi-agent / multi-type orchestrator
+    diagnostics.ts / probe.ts  # Diagnostics & selector probe
+    …
+wxt.config.ts                  # Manifest V3, host_permissions (incl. Grok)
+package.json
+LICENSE / NOTICE / CONTRIBUTING.md / SECURITY.md / INSTALL.md
 ```
 
 ## Contributing
